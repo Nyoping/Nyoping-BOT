@@ -14,21 +14,18 @@
 </head>
 <body>
   <h1>뇨핑봇 대시보드</h1>
-
   <div class="card">
     <h3>운영자 로그인</h3>
     {% if not admin_enabled %}
       <p class="muted">Render 환경변수 <code>DASHBOARD_ADMIN_PASSWORD</code>를 설정하면 활성화됩니다.</p>
     {% else %}
       {% if admin_error %}<p style="color:#b00">{{ admin_error }}</p>{% endif %}
-      <!-- IMPORTANT: must be POST to /admin-login -->
       <form method="post" action="/admin-login">
         <input type="password" name="password" placeholder="관리자 비밀번호" autocomplete="current-password" />
         <div style="height:10px"></div>
         <button class="btn" type="submit">로그인</button>
       </form>
     {% endif %}
-
     {% if disable_discord_oauth %}
       <p class="muted">Discord 로그인은 현재 비활성화 상태입니다(<code>DISABLE_DISCORD_OAUTH=1</code>).</p>
     {% endif %}
