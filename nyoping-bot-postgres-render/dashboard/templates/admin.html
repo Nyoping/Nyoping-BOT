@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>뇨핑봇 관리자</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:40px;max-width:980px}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .col{flex:1;min-width:320px}
+    .btn{display:inline-block;padding:10px 14px;border-radius:10px;border:1px solid #333;text-decoration:none;color:#fff;background:#111;cursor:pointer}
+    .btnDanger{display:inline-block;padding:10px 14px;border-radius:10px;border:1px solid #b00;text-decoration:none;color:#fff;background:#b00;cursor:pointer}
+    .muted{color:#666;font-size:14px}
+    input,select{padding:10px;border-radius:10px;border:1px solid #ccc;width:100%;box-sizing:border-box}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #eee;padding:8px;text-align:left;font-size:14px}
+    code{background:#f3f3f3;padding:2px 6px;border-radius:6px}
+    .flash{background:#eef9ee;border:1px solid #bfe5bf;padding:10px;border-radius:10px}
+    .error{background:#ffecec;border:1px solid #ffbdbd;padding:10px;border-radius:10px}
+  </style>
+</head>
+<body>
+  <h1>관리자 페이지</h1>
+  <p class="muted">봇(weirdhost)과 동일한 Postgres DB를 사용해 설정/규칙/XP를 관리합니다.</p>
+  <p><a href="/">← 메인으로</a></p>
+
+  {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <h3>서버 선택</h3>
+    <form method="get" action="/admin">
+      <div class="row">
+        <div class="col">
+          <label>Guild ID</label>
+          <input name="guild_id" placeholder="예: 1478390028190224518" value="{{ guild_id or '' }}">
+        </div>
+        <div class="col" style="display:flex;align-items:flex-end">
+          <button class="btn" type="submit">불러오기</button>
+        </div>
+      </div>
+    </form>
+    <p class="muted">서버 ID는 Discord 개발자 모드에서 서버 우클릭 → ID 복사.</p>
+  </div>
+
+  {% if not guild_id %}
+    <p class="muted">먼저 Guild ID를 입력하고 불러오기를 눌러주세요.</p>
+  {% else %}
+
+  <div class="row">
+    <div class="card col">
+      <h3>서버 설정</h3>
+      <form method="post" action="/admin/settings">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <label>출석 XP</label>
+        <input name="checkin_xp" type="number" value="{{ settings.checkin_xp if settings else 50 }}">
+        <div style="height:10px"></div>
+
+        <label><input type="checkbox" name="checkin_limit_enabled" {% if settings and settings.checkin_limit_enabled %}checked{% endif %}> 출석 제한 사용(하루 1회)</label>
+        <div style="height:10px"></div>
+
+        <label>채팅 XP</label>
+        <input name="message_xp" type="number" value="{{ settings.message_xp if settings else 5 }}">
+        <div style="height:10px"></div>
+
+        <label>채팅 XP 쿨다운(초)</label>
+        <input name="message_cooldown_sec" type="number" value="{{ settings.message_cooldown_sec if settings else 60 }}">
+        <div style="height:10px"></div>
+
+        <label>음성 XP(분당)</label>
+        <input name="voice_xp_per_min" type="number" value="{{ settings.voice_xp_per_min if settings else 2 }}">
+        <div style="height:12px"></div>
+
+        <button class="btn" type="submit">저장</button>
+      </form>
+    </div>
+
+    <div class="card col">
+      <h3>빠른 작업</h3>
+
+      <h4>출석 초기화(오늘 다시 출석 가능)</h4>
+      <form method="post" action="/admin/checkin/reset">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <label>유저 ID</label>
+        <input name="user_id" placeholder="유저 ID" required>
+        <div style="height:10px"></div>
+        <label>날짜(ymd)</label>
+        <input name="ymd" value="{{ today_ymd }}" required>
+        <div style="height:12px"></div>
+        <button class="btnDanger" type="submit">출석 초기화</button>
+      </form>
+
+      <div style="height:18px"></div>
+
+      <h4>레벨 조정(레벨 × 100 XP로 설정)</h4>
+      <form method="post" action="/admin/level/set">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <label>유저 ID</label>
+        <input name="user_id" placeholder="유저 ID" required>
+        <div style="height:10px"></div>
+        <label>레벨</label>
+        <input name="level" type="number" min="0" value="0" required>
+        <div style="height:12px"></div>
+        <button class="btn" type="submit">레벨 적용</button>
+      </form>
+
+      <p class="muted" style="margin-top:12px">* 서버장 전용으로 쓰려면, 이 페이지 접근 비밀번호를 서버장만 공유하세요.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>레벨 역할 규칙</h3>
+    <p class="muted">레벨 도달 시 역할 추가/제거. 역할 ID는 Discord 개발자 모드에서 역할 우클릭 → ID 복사.</p>
+
+    <div class="row">
+      <div class="col">
+        <h4>규칙 추가/수정</h4>
+        <form method="post" action="/admin/levelrole/set">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}">
+          <label>레벨</label>
+          <input name="level" type="number" min="1" required>
+          <div style="height:10px"></div>
+          <label>추가할 역할 ID</label>
+          <input name="add_role_id" required>
+          <div style="height:10px"></div>
+          <label>제거할 역할 ID (선택)</label>
+          <input name="remove_role_id">
+          <div style="height:12px"></div>
+          <button class="btn" type="submit">저장</button>
+        </form>
+      </div>
+
+      <div class="col">
+        <h4>규칙 삭제</h4>
+        <form method="post" action="/admin/levelrole/delete">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}">
+          <label>삭제할 레벨</label>
+          <input name="level" type="number" min="1" required>
+          <div style="height:12px"></div>
+          <button class="btnDanger" type="submit">삭제</button>
+        </form>
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <h4>현재 규칙</h4>
+    <table>
+      <thead>
+        <tr><th>레벨</th><th>추가 역할</th><th>제거 역할</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rules %}
+          <tr>
+            <td>{{ r.level }}</td>
+            <td>{{ r.add_role_id }}</td>
+            <td>{{ r.remove_role_id if r.remove_role_id else '-' }}</td>
+          </tr>
+        {% endfor %}
+        {% if not rules %}
+          <tr><td colspan="3" class="muted">규칙이 없습니다.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>TOP 10 XP</h3>
+    <table>
+      <thead><tr><th>유저 ID</th><th>XP</th><th>레벨</th></tr></thead>
+      <tbody>
+      {% for u in top %}
+        <tr>
+          <td>{{ u.user_id }}</td>
+          <td>{{ u.xp }}</td>
+          <td>{{ (u.xp // 100) }}</td>
+        </tr>
+      {% endfor %}
+      {% if not top %}
+        <tr><td colspan="3" class="muted">데이터가 없습니다.</td></tr>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  {% endif %}
+</body>
+</html>
