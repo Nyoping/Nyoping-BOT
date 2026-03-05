@@ -86,6 +86,9 @@ async def _startup():
             v TEXT NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );''')
+        # MIGRATION: legacy DB may not have updated_at column
+        await conn.execute("ALTER TABLE dashboard_kv ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();")
+
 
 @app.on_event('shutdown')
 async def _shutdown():
@@ -125,11 +128,19 @@ async def _kv_set(key: str, value: str) -> None:
     if pool is None:
         return
     async with pool.acquire() as conn:
-        await conn.execute(
-            'INSERT INTO dashboard_kv(k,v,updated_at) VALUES ($1,$2,NOW()) '
-            'ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v, updated_at=NOW()',
-            key, value
-        )
+        try:
+            await conn.execute(
+                'INSERT INTO dashboard_kv(k,v,updated_at) VALUES ($1,$2,NOW()) '
+                'ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v, updated_at=NOW()',
+                key, value
+            )
+        except Exception:
+            # fallback for legacy schema without updated_at
+            await conn.execute(
+                'INSERT INTO dashboard_kv(k,v) VALUES ($1,$2) '
+                'ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v',
+                key, value
+            )
 
 async def _rl_remaining(key: str) -> int:
     raw = await _kv_get(f'rl:{key}:until')
