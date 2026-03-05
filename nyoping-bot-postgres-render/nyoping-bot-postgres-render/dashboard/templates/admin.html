@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <title>뇨핑봇 대시보드 (관리자)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Apple SD Gothic Neo,sans-serif;max-width:860px;margin:40px auto;padding:0 16px}
+    .card{border:1px solid #ddd;border-radius:14px;padding:18px;margin:14px 0}
+    a.btn,button.btn{display:inline-block;padding:10px 14px;border-radius:10px;background:#111;color:#fff;text-decoration:none;border:none;cursor:pointer}
+    input{padding:10px;border-radius:10px;border:1px solid #ccc;width:220px}
+    ul{margin:8px 0 0 18px}
+  </style>
+</head>
+<body>
+  <h1>🛠️ 관리자 모드</h1>
+  <div class="card">
+    <p>길드 ID를 입력해서 바로 이동할 수 있어요.</p>
+    <form action="/admin-goto" method="post">
+      <input name="guild_id" placeholder="Guild ID" required />
+      <button class="btn" type="submit">이동</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <p>DB에 등록된 길드 목록(있다면):</p>
+    {% if guild_ids %}
+      <ul>
+      {% for gid in guild_ids %}
+        <li><a href="/guild/{{ gid }}">{{ gid }}</a></li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p><em>아직 없음</em></p>
+    {% endif %}
+  </div>
+
+  <a class="btn" href="/admin-logout">로그아웃</a>
+</body>
+</html>
