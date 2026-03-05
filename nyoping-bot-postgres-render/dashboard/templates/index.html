@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <title>뇨핑봇 대시보드</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Apple SD Gothic Neo,sans-serif;max-width:860px;margin:40px auto;padding:0 16px}
+    .card{border:1px solid #ddd;border-radius:14px;padding:18px;margin:14px 0}
+    a.btn{display:inline-block;padding:10px 14px;border-radius:10px;background:#111;color:#fff;text-decoration:none}
+  </style>
+</head>
+<body>
+  <h1>🐧 뇨핑봇 대시보드</h1>
+  <div class="card">
+    <p>Discord로 로그인해서 서버 설정을 관리하세요.</p>
+    <a class="btn" href="/login">Discord로 로그인</a>
+  </div>
+  <div class="card">
+    <p>서버장(운영자)용: 비상 로그인</p>
+    <form action="/admin-login" method="post">
+      <input type="password" name="password" placeholder="관리자 비밀번호" style="padding:10px;border-radius:10px;border:1px solid #ccc;"/>
+      <button class="btn" type="submit" style="margin-left:8px">로그인</button>
+    </form>
+    <small>※ DASHBOARD_ADMIN_PASSWORD 설정 시에만 사용</small>
+  </div>
+</body>
+</html>
