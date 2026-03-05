@@ -10,6 +10,7 @@ class Config:
     guild_id: int | None
     database_url: str
     log_level: str
+    force_resync: bool
 
 def _get_int(name: str) -> int | None:
     v = os.getenv(name, "").strip()
@@ -31,4 +32,5 @@ def load_env_config() -> Config:
         guild_id=_get_int("GUILD_ID"),
         database_url=db,
         log_level=(os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"),
+        force_resync=(os.getenv("FORCE_RESYNC", "0").strip() == "1"),
     )

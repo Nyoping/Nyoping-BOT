@@ -45,13 +45,17 @@
       <h3>서버 설정</h3>
       <form method="post" action="/admin/save-settings">
         <input type="hidden" name="guild_id" value="{{ guild_id }}">
-        <label>출석 XP</label><input name="checkin_xp" type="number" value="{{ settings.checkin_xp }}">
+        <label>출석 XP</label>
+        <input name="checkin_xp" type="number" value="{{ settings.checkin_xp }}">
         <div style="height:8px"></div>
-        <label>채팅 XP</label><input name="message_xp" type="number" value="{{ settings.message_xp }}">
+        <label>채팅 XP</label>
+        <input name="message_xp" type="number" value="{{ settings.message_xp }}">
         <div style="height:8px"></div>
-        <label>채팅 XP 쿨다운(초)</label><input name="message_cooldown_sec" type="number" value="{{ settings.message_cooldown_sec }}">
+        <label>채팅 XP 쿨다운(초)</label>
+        <input name="message_cooldown_sec" type="number" value="{{ settings.message_cooldown_sec }}">
         <div style="height:8px"></div>
-        <label>음성 XP(분당)</label><input name="voice_xp_per_min" type="number" value="{{ settings.voice_xp_per_min }}">
+        <label>음성 XP(분당)</label>
+        <input name="voice_xp_per_min" type="number" value="{{ settings.voice_xp_per_min }}">
         <div style="height:10px"></div>
         <button class="btn" type="submit">저장</button>
       </form>
@@ -97,7 +101,8 @@
   <div class="row">
     <div class="card">
       <h3>레벨 역할 규칙</h3>
-      <p class="muted">역할/검색이 429면 “남은 N초”가 표시됩니다. 그동안 재시도하지 마세요(호스팅 IP 보호).</p>
+      <p class="muted">먼저 “역할 불러오기”를 누르고 선택하세요.</p>
+
       <button class="btn" type="button" onclick="loadRoles()">역할 불러오기</button>
       <div style="height:10px"></div>
 
@@ -109,15 +114,38 @@
       <div style="height:10px"></div>
       <label>추가할 역할</label>
       <input id="addRolePick" placeholder="클릭 시 자동 입력">
-      <div style="height:12px"></div>
+      <div style="height:8px"></div>
 
+      <div style="height:12px"></div>
       <form method="post" action="/admin/rules-upsert" onsubmit="return syncRoleHidden()">
         <input type="hidden" name="guild_id" value="{{ guild_id }}">
-        <label>레벨</label><input name="level" type="number" placeholder="예: 5">
+        <label>레벨</label>
+        <input name="level" type="number" placeholder="예: 5">
         <input type="hidden" name="add_role_pick" id="addRoleHidden">
         <div style="height:10px"></div>
         <button class="btn" type="submit">규칙 저장</button>
       </form>
+
+      <div style="height:16px"></div>
+      <h4>현재 규칙</h4>
+      <table>
+        <thead><tr><th>레벨</th><th>추가</th><th></th></tr></thead>
+        <tbody>
+        {% for r in rules %}
+          <tr>
+            <td>{{ r.level }}</td>
+            <td>{{ r.add_role_id }}</td>
+            <td>
+              <form method="post" action="/admin/rules-delete" style="margin:0">
+                <input type="hidden" name="guild_id" value="{{ guild_id }}">
+                <input type="hidden" name="level" value="{{ r.level }}">
+                <button class="btn" type="submit">삭제</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
     </div>
 
     <div class="card">
@@ -126,13 +154,16 @@
         <input type="hidden" name="guild_id" value="{{ guild_id }}">
         <button class="btn" type="submit">닉네임 불러오기</button>
       </form>
-      <p class="muted">한 번에 3명만 갱신(레이트리밋 방지)</p>
       <table>
         <thead><tr><th>#</th><th>유저</th><th>유저ID</th><th>XP</th><th>레벨</th></tr></thead>
         <tbody>
         {% for u in top10 %}
           <tr>
-            <td>{{ loop.index }}</td><td>{{ u.name }}</td><td>{{ u.user_id }}</td><td>{{ u.xp }}</td><td>{{ u.level }}</td>
+            <td>{{ loop.index }}</td>
+            <td>{{ u.name }}</td>
+            <td>{{ u.user_id }}</td>
+            <td>{{ u.xp }}</td>
+            <td>{{ u.level }}</td>
           </tr>
         {% endfor %}
         </tbody>
@@ -147,73 +178,73 @@
     function renderList(listEl, items, onClick) {
       listEl.innerHTML = '';
       if (!items || items.length === 0) {
-        const d=document.createElement('div'); d.className='muted'; d.textContent='결과가 없습니다.'; listEl.appendChild(d); return;
+        const d=document.createElement('div'); d.className='muted'; d.textContent='검색 결과가 없습니다.'; listEl.appendChild(d); return;
       }
       for (const it of items) {
-        const div=document.createElement('div');
-        div.className='item';
-        div.textContent=it.label;
-        div.onclick=()=>onClick(it);
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.textContent = it.label;
+        div.onclick = () => onClick(it);
         listEl.appendChild(div);
       }
     }
 
-    const userListEl=document.getElementById('userList');
-    const userSearchEl=document.getElementById('userSearch');
-    const userPickEl=document.getElementById('userPick');
+    const userListEl = document.getElementById('userList');
+    const userSearchEl = document.getElementById('userSearch');
+    const userPickEl = document.getElementById('userPick');
 
     async function searchMembers() {
-      const q=(userSearchEl.value||'').trim();
-      if (q.length < 2) { userListEl.innerHTML="<div class='muted'>2글자 이상 입력하세요.</div>"; return; }
-      userListEl.innerHTML="<div class='muted'>검색 중...</div>";
+      const q = (userSearchEl.value || '').trim();
+      if (q.length < 2) {
+        userListEl.innerHTML = "<div class='muted'>2글자 이상 입력하세요.</div>";
+        return;
+      }
+      userListEl.innerHTML = "<div class='muted'>검색 중...</div>";
       const res = await fetch(`/admin/api/members_search?guild_id={{ guild_id }}&q=${encodeURIComponent(q)}`);
       if (res.status === 429) {
-        const j = await res.json().catch(()=>({}));
-        const rem = j.remaining || 0;
-        userListEl.innerHTML = `<div class='err'>Discord API 레이트리밋(members). 남은 ${rem}초</div>`;
+        userListEl.innerHTML = "<div class='err'>Discord API 레이트리밋(members). 잠시 후 다시 시도하세요.</div>";
         return;
       }
       const data = await res.json();
       if (Array.isArray(data)) renderList(userListEl, data, (it)=>{ userPickEl.value = it.label; });
-      else userListEl.innerHTML="<div class='err'>검색 실패</div>";
+      else userListEl.innerHTML = "<div class='err'>멤버 검색 실패</div>";
     }
-    userSearchEl.addEventListener('input', ()=>{
+
+    userSearchEl.addEventListener('input', () => {
       clearTimeout(userTimer);
-      userTimer=setTimeout(searchMembers, 450);
+      userTimer = setTimeout(searchMembers, 400);
     });
 
-    function syncUserHidden(hiddenId){
-      document.getElementById(hiddenId).value=userPickEl.value;
+    function syncUserHidden(hiddenId) {
+      document.getElementById(hiddenId).value = userPickEl.value;
       return true;
     }
 
-    const roleListEl=document.getElementById('roleList');
-    const roleSearchEl=document.getElementById('roleSearch');
-    const addRolePickEl=document.getElementById('addRolePick');
+    const roleListEl = document.getElementById('roleList');
+    const roleSearchEl = document.getElementById('roleSearch');
+    const addRolePickEl = document.getElementById('addRolePick');
 
-    function renderRolesFiltered(){
-      const q=(roleSearchEl.value||'').toLowerCase();
-      const filtered = roles.filter(r => (r.label||'').toLowerCase().includes(q) || String(r.id).includes(q)).slice(0,200);
+    function renderRolesFiltered() {
+      const q = (roleSearchEl.value || '').toLowerCase();
+      const filtered = roles.filter(r => (r.label||'').toLowerCase().includes(q) || String(r.id).includes(q)).slice(0, 200);
       renderList(roleListEl, filtered, (it)=>{ addRolePickEl.value = it.label; });
     }
     roleSearchEl.addEventListener('input', renderRolesFiltered);
 
-    async function loadRoles(){
-      roleListEl.innerHTML="<div class='muted'>불러오는 중...</div>";
+    async function loadRoles() {
+      roleListEl.innerHTML = "<div class='muted'>불러오는 중...</div>";
       const res = await fetch(`/admin/api/roles?guild_id={{ guild_id }}`);
       if (res.status === 429) {
-        const j = await res.json().catch(()=>({}));
-        const rem = j.remaining || 0;
-        roleListEl.innerHTML = `<div class='err'>Discord API 레이트리밋(roles). 남은 ${rem}초</div>`;
+        roleListEl.innerHTML = "<div class='err'>Discord API 레이트리밋(roles). 잠시 후 다시 시도하세요.</div>";
         return;
       }
       const data = await res.json();
-      if (Array.isArray(data)) { roles=data; renderRolesFiltered(); }
-      else roleListEl.innerHTML="<div class='err'>역할 불러오기 실패</div>";
+      if (Array.isArray(data)) { roles = data; renderRolesFiltered(); }
+      else roleListEl.innerHTML = "<div class='err'>역할 불러오기 실패</div>";
     }
 
-    function syncRoleHidden(){
-      document.getElementById('addRoleHidden').value=addRolePickEl.value;
+    function syncRoleHidden() {
+      document.getElementById('addRoleHidden').value = addRolePickEl.value;
       return true;
     }
   </script>

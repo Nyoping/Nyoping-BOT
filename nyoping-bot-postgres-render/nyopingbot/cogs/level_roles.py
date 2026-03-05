@@ -9,10 +9,10 @@ from .admin_settings import is_admin
 
 class LevelRoleGroup(app_commands.Group):
     def __init__(self, bot: commands.Bot):
-        super().__init__(name="levelrole", description="레벨 역할 설정(관리자)")
+        super().__init__(name=app_commands.locale_str("levelrole", key="grp_levelrole_name"), description=app_commands.locale_str("레벨 역할 설정(관리자)", key="grp_levelrole_desc"))
         self.bot = bot
 
-    @app_commands.command(name="set", description="레벨 도달 시 역할 추가/제거 규칙 설정")
+    @app_commands.command(name=app_commands.locale_str("set", key="levelrole_set_name"), description=app_commands.locale_str("레벨 도달 시 역할 추가/제거 규칙 설정", key="levelrole_set_desc"))
     async def set_rule(self, interaction: discord.Interaction, level: app_commands.Range[int, 0, 100000], add_role: discord.Role, remove_role: discord.Role | None = None):
         if not is_admin(interaction):
             await interaction.response.send_message("서버 관리 권한이 필요해요.", ephemeral=True)
@@ -20,7 +20,7 @@ class LevelRoleGroup(app_commands.Group):
         await set_level_role_rule(self.bot.db_pool, interaction.guild.id, int(level), int(add_role.id), int(remove_role.id) if remove_role else None)
         await interaction.response.send_message(f"✅ Lv.{level}: +{add_role.mention}" + (f" / -{remove_role.mention}" if remove_role else ""), ephemeral=True)
 
-    @app_commands.command(name="list", description="규칙 목록")
+    @app_commands.command(name=app_commands.locale_str("list", key="levelrole_list_name"), description=app_commands.locale_str("규칙 목록", key="levelrole_list_desc"))
     async def list_rules(self, interaction: discord.Interaction):
         if not is_admin(interaction):
             await interaction.response.send_message("서버 관리 권한이 필요해요.", ephemeral=True)
@@ -37,7 +37,7 @@ class LevelRoleGroup(app_commands.Group):
             lines.append(f"Lv.{lvl}: +<@&{add}>" + (f" / -<@&{int(rem)}>" if rem else ""))
         await interaction.response.send_message("📌 레벨 역할 규칙\n" + "\n".join(lines), ephemeral=True)
 
-    @app_commands.command(name="remove", description="규칙 삭제")
+    @app_commands.command(name=app_commands.locale_str("remove", key="levelrole_remove_name"), description=app_commands.locale_str("규칙 삭제", key="levelrole_remove_desc"))
     async def remove_rule(self, interaction: discord.Interaction, level: app_commands.Range[int, 0, 100000]):
         if not is_admin(interaction):
             await interaction.response.send_message("서버 관리 권한이 필요해요.", ephemeral=True)

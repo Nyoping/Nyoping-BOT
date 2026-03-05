@@ -7,7 +7,7 @@ class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="clean", description="최근 메시지 N개 삭제")
+    @app_commands.command(name=app_commands.locale_str("clean", key="cmd_clean_name"), description=app_commands.locale_str("최근 메시지 N개 삭제", key="cmd_clean_desc"))
     @app_commands.checks.has_permissions(manage_messages=True)
     async def clean(self, interaction, count: app_commands.Range[int, 1, 200]):
         if not interaction.channel:

@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from ..db import (
     get_guild_settings, add_user_xp, get_user_xp, can_gain_message_xp, touch_last_message,
+    upsert_member_cache,
     record_checkin, get_checkin_count, top_users, get_level_role_rule
 )
 from ..utils import kst_today_ymd, xp_to_level
@@ -18,6 +19,19 @@ class LevelingCog(commands.Cog):
     async def on_message(self, message: discord.Message):
         if message.guild is None or message.author.bot:
             return
+        # update member cache for dashboard UI (no Discord REST)
+        try:
+            await upsert_member_cache(
+                self.bot.db_pool, message.guild.id, message.author.id,
+                getattr(message.author, "name", None),
+                getattr(message.author, "discriminator", None),
+                getattr(message.author, "global_name", None),
+                getattr(message.author, "nick", None),
+                getattr(message.author, "display_name", None),
+            )
+        except Exception:
+            pass
+
         settings = await get_guild_settings(self.bot.db_pool, message.guild.id)
         msg_xp = int(settings.get("message_xp", 5))
         cooldown = int(settings.get("message_cooldown_sec", 60))
@@ -37,6 +51,19 @@ class LevelingCog(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.guild is None or member.bot:
             return
+        # update member cache for dashboard UI (no Discord REST)
+        try:
+            await upsert_member_cache(
+                self.bot.db_pool, member.guild.id, member.id,
+                getattr(member, "name", None),
+                getattr(member, "discriminator", None),
+                getattr(member, "global_name", None),
+                getattr(member, "nick", None),
+                getattr(member, "display_name", None),
+            )
+        except Exception:
+            pass
+
         key = (member.guild.id, member.id)
         from datetime import datetime, timezone
 
@@ -85,11 +112,25 @@ class LevelingCog(commands.Cog):
         except discord.Forbidden:
             pass
 
-    @app_commands.command(name="checkin", description="출석체크 (한국 기준 하루 1회)")
+    @app_commands.command(name=app_commands.locale_str("checkin", key="cmd_checkin_name"), description=app_commands.locale_str("출석체크 (한국 기준 하루 1회)", key="cmd_checkin_desc"))
     async def checkin(self, interaction: discord.Interaction):
         if not interaction.guild:
             await interaction.response.send_message("길드에서만 사용 가능해요.", ephemeral=True)
             return
+        # update member cache for dashboard UI (no Discord REST)
+        try:
+            m = interaction.user
+            await upsert_member_cache(
+                self.bot.db_pool, interaction.guild.id, m.id,
+                getattr(m, "name", None),
+                getattr(m, "discriminator", None),
+                getattr(m, "global_name", None),
+                getattr(m, "nick", None),
+                getattr(m, "display_name", None),
+            )
+        except Exception:
+            pass
+
         settings = await get_guild_settings(self.bot.db_pool, interaction.guild.id)
         limit_enabled = bool(settings.get("checkin_limit_enabled", True))
         ymd = kst_today_ymd()
@@ -108,7 +149,7 @@ class LevelingCog(commands.Cog):
 
         await interaction.response.send_message(f"✅ 출석 완료! +{delta}XP (현재 {xp}XP / Lv.{after})", ephemeral=True)
 
-    @app_commands.command(name="profile", description="내 레벨/경험치 확인")
+    @app_commands.command(name=app_commands.locale_str("profile", key="cmd_profile_name"), description=app_commands.locale_str("내 레벨/경험치 확인", key="cmd_profile_desc"))
     async def profile(self, interaction: discord.Interaction):
         if not interaction.guild:
             await interaction.response.send_message("길드에서만 사용 가능해요.", ephemeral=True)
@@ -118,7 +159,7 @@ class LevelingCog(commands.Cog):
         c = await get_checkin_count(self.bot.db_pool, interaction.guild.id, interaction.user.id)
         await interaction.response.send_message(f"👤 {interaction.user.mention}\nXP: {xp}\n레벨: Lv.{lvl}\n출석: {c}회", ephemeral=True)
 
-    @app_commands.command(name="leaderboard", description="서버 랭킹 TOP 10")
+    @app_commands.command(name=app_commands.locale_str("leaderboard", key="cmd_leaderboard_name"), description=app_commands.locale_str("서버 랭킹 TOP 10", key="cmd_leaderboard_desc"))
     async def leaderboard(self, interaction: discord.Interaction):
         if not interaction.guild:
             await interaction.response.send_message("길드에서만 사용 가능해요.", ephemeral=True)
