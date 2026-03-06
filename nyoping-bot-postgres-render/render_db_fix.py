@@ -5,14 +5,11 @@ import sys
 import asyncpg
 
 CANDIDATES = [
-    # level role rules
     (("guild_id", "level"), "uq_{table}_guild_level"),
-    # reaction block
     (("message_id", "blocked_role_id"), "uq_{table}_message_blocked_role"),
     (("guild_id", "message_id", "blocked_role_id"), "uq_{table}_guild_message_blocked_role"),
     (("guild_id", "channel_id", "message_id", "blocked_role_id"), "uq_{table}_guild_channel_message_blocked_role"),
     (("channel_id", "message_id", "blocked_role_id"), "uq_{table}_channel_message_blocked_role"),
-    # reaction role
     (("message_id", "emoji"), "uq_{table}_message_emoji"),
     (("guild_id", "message_id", "emoji"), "uq_{table}_guild_message_emoji"),
     (("guild_id", "channel_id", "message_id", "emoji"), "uq_{table}_guild_channel_message_emoji"),
@@ -37,8 +34,8 @@ def slug(name: str) -> str:
 async def main():
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("ERROR: DATABASE_URL 환경변수가 없습니다.")
-        sys.exit(1)
+        print("WARNING: DATABASE_URL 환경변수가 없어 DB 보정을 건너뜁니다.")
+        return
 
     conn = await asyncpg.connect(dsn)
     try:
@@ -49,7 +46,7 @@ async def main():
             ORDER BY table_name
         """)
         tables = [r["table_name"] for r in rows]
-        print(f"public 스키마 테이블 수: {len(tables)}")
+        print(f"[render_db_fix] public 테이블 수: {len(tables)}")
         touched = 0
 
         for table in tables:
@@ -79,12 +76,8 @@ async def main():
 
             if local_changes:
                 touched += 1
-                print(f"\n[{table}]")
-                for kind, idx_name, cand_cols in local_changes:
-                    print(f"  - {kind}: {idx_name} -> {', '.join(cand_cols)}")
-
-        print(f"\n완료: 인덱스/제약 후보를 적용한 테이블 {touched}개")
-        print("이제 Render 대시보드에서 반응 차단 저장을 다시 테스트하세요.")
+                print(f"[render_db_fix] {table}: {len(local_changes)}개 인덱스 보정")
+        print(f"[render_db_fix] 완료: 후보 인덱스 보정 테이블 {touched}개")
     finally:
         await conn.close()
 

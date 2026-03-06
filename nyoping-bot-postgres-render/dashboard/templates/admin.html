@@ -191,7 +191,7 @@
 
   <div class="card">
     <h2>레벨 역할 규칙</h2>
-    <div class="small">규칙은 누적 적용됩니다. 예: Lv.10에 A추가, Lv.20에 B추가/A제거 → Lv.15는 A, Lv.25는 B<br>역할 이름이 처음에 ID나 물음표로 보여도 잠시 후 자동으로 이름으로 바뀌어야 정상입니다.</div>
+    <div class="small">규칙은 누적 적용됩니다. 예: Lv.10에 A추가, Lv.20에 B추가/A제거 → Lv.15는 A, Lv.25는 B</div>
 
     <form method="post" action="/admin/rules-upsert" onsubmit="return validateRuleForm()">
       <input type="hidden" name="guild_id" value="{{ guild_id }}">
@@ -310,7 +310,7 @@
       <tr>
         <td>{{ _channel_map.get(b.channel_id, _channel_map.get(b.channel_id|string, b.channel_id)) }}</td>
         <td class="mono">{{ b.message_id }}</td>
-        <td><span class="role-inline" data-role-id="{{ b.blocked_role_id }}">{{ _role_map.get(b.blocked_role_id, _role_map.get(b.blocked_role_id|string, _role_map.get(b.blocked_role_id|int, "불러오는 중..."))) }}</span> ({{ b.blocked_role_id }})</td>
+        <td>{{ _role_map.get(b.blocked_role_id, _role_map.get(b.blocked_role_id|string, _role_map.get(b.blocked_role_id|int, "?"))) }} ({{ b.blocked_role_id }})</td>
         <td>
           <form method="post" action="/admin/reaction-block-delete">
             <input type="hidden" name="guild_id" value="{{ guild_id }}">
@@ -398,12 +398,12 @@
         <td>{{ rr.emoji }}</td>
         <td class="muted">
           {% for rid in rr.add_role_ids|default([]) %}
-            <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "불러오는 중..."))) }}</span> <span class="muted">({{ rid }})</span></span>
+            <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }} <span class="muted">({{ rid }})</span></span>
           {% endfor %}
         </td>
         <td class="muted">
           {% for rid in rr.remove_role_ids|default([]) %}
-            <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "불러오는 중..."))) }}</span> <span class="muted">({{ rid }})</span></span>
+            <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }} <span class="muted">({{ rid }})</span></span>
           {% endfor %}
         </td>
         <td>
@@ -477,7 +477,6 @@ async function roleSearch(q){
     const data = await res.json();
     if (data.ok){
       (data.roles||[]).forEach(r=>{ roleNameById[String(r.role_id)] = r.role_name; });
-      try{ hydrateExistingRoleLabels(); }catch(e){}
       return data.roles||[];
     }
   }catch(e){
@@ -722,39 +721,9 @@ function fillTargetFields(form){
   return true;
 }
 
-
-async function preloadRoleMap(){
-  try{
-    const all = await roleSearch('');
-    (all||[]).forEach(r=>{
-      roleNameById[String(r.role_id)] = r.role_name || String(r.role_id);
-    });
-  }catch(e){
-    console.error('preloadRoleMap failed', e);
-  }
-}
-
-function hydrateExistingRoleLabels(){
-  document.querySelectorAll('[data-role-id]').forEach(el=>{
-    const rid = String(el.getAttribute('data-role-id') || '').trim();
-    if (!rid) return;
-    const name = roleNameById[rid];
-    if (!name) return;
-    const target = el.querySelector('.role-name');
-    if (target) target.textContent = name;
-    else el.textContent = name;
-  });
-}
-
-async function hydrateDashboardLabels(){
-  await preloadRoleMap();
-  hydrateExistingRoleLabels();
-}
-
 (function init(){
   onTargetTypeChange();
   renderChips();
-  setTimeout(()=>{ try{ hydrateDashboardLabels(); }catch(e){ console.error('hydrateDashboardLabels failed', e); } }, 50);
 })();
 /* ---- Reaction block UI ---- */
 let rbSelected = [];
