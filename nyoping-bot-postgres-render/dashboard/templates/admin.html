@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>뇨핑봇 관리자</title>
+  <style>
+    body{font-family:system-ui;margin:40px;max-width:980px}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0;flex:1;min-width:320px}
+    .muted{color:#666;font-size:14px}
+    .btn{padding:10px 14px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;cursor:pointer}
+    input{padding:10px;border-radius:10px;border:1px solid #ccc;width:100%;box-sizing:border-box}
+    .pill{display:inline-block;background:#f3f3f3;border-radius:999px;padding:2px 10px;margin-left:6px;font-size:12px}
+    .err{color:#b00}
+    .ok{color:#060}
+    .listbox{max-height:240px;overflow:auto;border:1px solid #eee;border-radius:10px;padding:8px}
+    .item{padding:6px 8px;border-radius:8px;cursor:pointer}
+    .item:hover{background:#f6f6f6}
+    code{background:#f3f3f3;padding:2px 6px;border-radius:6px}
+    table{width:100%;border-collapse:collapse}
+    td,th{border-bottom:1px solid #eee;padding:8px;text-align:left;font-size:14px}
+    hr{border:none;border-top:1px solid #eee;margin:16px 0}
+  </style>
+</head>
+<body>
+  <h1>관리자 페이지</h1>
+  <p class="muted">대시보드 주소: {{ base_url }}</p>
+
+  {% if msg %}<p class="ok"><b>{{ msg }}</b></p>{% endif %}
+  {% if error %}<p class="err"><b>{{ error }}</b></p>{% endif %}
+
+  <div class="card">
+    <form method="get" action="/admin">
+      <label><b>Guild ID</b> <span class="pill">서버 ID</span></label>
+      <input name="guild_id" value="{{ guild_id }}" placeholder="예: 1478390028190224518" />
+      <div style="height:10px"></div>
+      <button class="btn" type="submit">불러오기</button>
+    </form>
+  </div>
+
+  {% if settings %}
+  <div class="row">
+    <div class="card">
+      <h3>서버 설정</h3>
+      <form method="post" action="/admin/save-settings">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <label>출석 XP</label>
+        <input name="checkin_xp" type="number" value="{{ settings.checkin_xp }}">
+        <div style="height:8px"></div>
+        <label>채팅 XP</label>
+        <input name="message_xp" type="number" value="{{ settings.message_xp }}">
+        <div style="height:8px"></div>
+        <label>채팅 XP 쿨다운(초)</label>
+        <input name="message_cooldown_sec" type="number" value="{{ settings.message_cooldown_sec }}">
+        <div style="height:8px"></div>
+        <label>음성 XP(분당)</label>
+        <input name="voice_xp_per_min" type="number" value="{{ settings.voice_xp_per_min }}">
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">저장</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>빠른 작업</h3>
+      <p class="muted">유저 검색(2글자+) → 클릭하면 선택됩니다.</p>
+
+      <label><b>유저 검색</b></label>
+      <input id="userSearch" placeholder="닉네임/아이디 검색">
+      <div style="height:8px"></div>
+      <div class="listbox" id="userList"><div class="muted">2글자 이상 입력하세요.</div></div>
+
+      <div style="height:10px"></div>
+      <label>선택된 유저</label>
+      <input id="userPick" placeholder="클릭 시 자동 입력">
+
+      <hr>
+
+      <form method="post" action="/admin/quick-checkin-reset" onsubmit="return syncUserHidden('userPickHidden1')">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <input type="hidden" name="user_pick" id="userPickHidden1">
+        <label>출석 초기화 날짜(YYYY-MM-DD)</label>
+        <input name="ymd" placeholder="예: 2026-03-05">
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">출석 초기화</button>
+      </form>
+
+      <div style="height:12px"></div>
+
+      <form method="post" action="/admin/quick-set-level" onsubmit="return syncUserHidden('userPickHidden2')">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <input type="hidden" name="user_pick" id="userPickHidden2">
+        <label>레벨</label>
+        <input name="level" type="number" placeholder="예: 10">
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">레벨 적용</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h3>레벨 역할 규칙</h3>
+      <p class="muted">먼저 “역할 불러오기”를 누르고 선택하세요.</p>
+
+      <button class="btn" type="button" onclick="loadRoles()">역할 불러오기</button>
+      <div style="height:10px"></div>
+
+      <label><b>역할 검색</b></label>
+      <input id="roleSearch" placeholder="역할 이름/ID 검색">
+      <div style="height:8px"></div>
+      <div class="listbox" id="roleList"><div class="muted">역할을 불러오세요.</div></div>
+
+      <div style="height:10px"></div>
+      <label>추가할 역할</label>
+      <input id="addRolePick" placeholder="클릭 시 자동 입력">
+      <div style="height:8px"></div>
+
+      <div style="height:12px"></div>
+      <form method="post" action="/admin/rules-upsert" onsubmit="return syncRoleHidden()">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <label>레벨</label>
+        <input name="level" type="number" placeholder="예: 5">
+        <input type="hidden" name="add_role_pick" id="addRoleHidden">
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">규칙 저장</button>
+      </form>
+
+      <div style="height:16px"></div>
+      <h4>현재 규칙</h4>
+      <table>
+        <thead><tr><th>레벨</th><th>추가</th><th></th></tr></thead>
+        <tbody>
+        {% for r in rules %}
+          <tr>
+            <td>{{ r.level }}</td>
+            <td>{{ r.add_role_id }}</td>
+            <td>
+              <form method="post" action="/admin/rules-delete" style="margin:0">
+                <input type="hidden" name="guild_id" value="{{ guild_id }}">
+                <input type="hidden" name="level" value="{{ r.level }}">
+                <button class="btn" type="submit">삭제</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>TOP 10 XP</h3>
+      <form method="post" action="/admin/api/resolve_top10">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}">
+        <button class="btn" type="submit">닉네임 불러오기</button>
+      </form>
+      <table>
+        <thead><tr><th>#</th><th>유저</th><th>유저ID</th><th>XP</th><th>레벨</th></tr></thead>
+        <tbody>
+        {% for u in top10 %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ u.name }}</td>
+            <td>{{ u.user_id }}</td>
+            <td>{{ u.xp }}</td>
+            <td>{{ u.level }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let roles = [];
+    let userTimer = null;
+
+    function renderList(listEl, items, onClick) {
+      listEl.innerHTML = '';
+      if (!items || items.length === 0) {
+        const d=document.createElement('div'); d.className='muted'; d.textContent='검색 결과가 없습니다.'; listEl.appendChild(d); return;
+      }
+      for (const it of items) {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.textContent = it.label;
+        div.onclick = () => onClick(it);
+        listEl.appendChild(div);
+      }
+    }
+
+    const userListEl = document.getElementById('userList');
+    const userSearchEl = document.getElementById('userSearch');
+    const userPickEl = document.getElementById('userPick');
+
+    async function searchMembers() {
+      const q = (userSearchEl.value || '').trim();
+      if (q.length < 2) {
+        userListEl.innerHTML = "<div class='muted'>2글자 이상 입력하세요.</div>";
+        return;
+      }
+      userListEl.innerHTML = "<div class='muted'>검색 중...</div>";
+      const res = await fetch(`/admin/api/members_search?guild_id={{ guild_id }}&q=${encodeURIComponent(q)}`);
+      if (res.status === 429) {
+        userListEl.innerHTML = "<div class='err'>Discord API 레이트리밋(members). 잠시 후 다시 시도하세요.</div>";
+        return;
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) renderList(userListEl, data, (it)=>{ userPickEl.value = it.label; });
+      else userListEl.innerHTML = "<div class='err'>멤버 검색 실패</div>";
+    }
+
+    userSearchEl.addEventListener('input', () => {
+      clearTimeout(userTimer);
+      userTimer = setTimeout(searchMembers, 400);
+    });
+
+    function syncUserHidden(hiddenId) {
+      document.getElementById(hiddenId).value = userPickEl.value;
+      return true;
+    }
+
+    const roleListEl = document.getElementById('roleList');
+    const roleSearchEl = document.getElementById('roleSearch');
+    const addRolePickEl = document.getElementById('addRolePick');
+
+    function renderRolesFiltered() {
+      const q = (roleSearchEl.value || '').toLowerCase();
+      const filtered = roles.filter(r => (r.label||'').toLowerCase().includes(q) || String(r.id).includes(q)).slice(0, 200);
+      renderList(roleListEl, filtered, (it)=>{ addRolePickEl.value = it.label; });
+    }
+    roleSearchEl.addEventListener('input', renderRolesFiltered);
+
+    async function loadRoles() {
+      roleListEl.innerHTML = "<div class='muted'>불러오는 중...</div>";
+      const res = await fetch(`/admin/api/roles?guild_id={{ guild_id }}`);
+      if (res.status === 429) {
+        roleListEl.innerHTML = "<div class='err'>Discord API 레이트리밋(roles). 잠시 후 다시 시도하세요.</div>";
+        return;
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) { roles = data; renderRolesFiltered(); }
+      else roleListEl.innerHTML = "<div class='err'>역할 불러오기 실패</div>";
+    }
+
+    function syncRoleHidden() {
+      document.getElementById('addRoleHidden').value = addRolePickEl.value;
+      return true;
+    }
+  </script>
+  {% endif %}
+</body>
+</html>
