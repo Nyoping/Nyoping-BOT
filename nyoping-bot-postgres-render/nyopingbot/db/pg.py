@@ -402,6 +402,32 @@ async def update_checkin_streak(pool: asyncpg.Pool, guild_id: int, user_id: int,
         )
     return int(streak)
 
+
+async def increment_checkin_streak_test_mode(pool: asyncpg.Pool, guild_id: int, user_id: int, today_ymd: str) -> int:
+    """When daily check-in limit is OFF, allow repeated same-day check-ins to increment streak
+    so admins can test streak bonuses immediately."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT last_ymd, streak FROM checkin_streaks WHERE guild_id=$1 AND user_id=$2",
+            guild_id, user_id,
+        )
+        last = row["last_ymd"] if row else None
+        streak = int(row["streak"]) if row else 0
+        if last:
+            streak = max(streak, 0) + 1
+        else:
+            streak = 1
+        await conn.execute(
+            """
+            INSERT INTO checkin_streaks (guild_id, user_id, last_ymd, streak)
+            VALUES ($1,$2,$3,$4)
+            ON CONFLICT (guild_id, user_id)
+            DO UPDATE SET last_ymd=$3, streak=$4
+            """,
+            guild_id, user_id, today_ymd, streak,
+        )
+    return int(streak)
+
 # ---- Level role sets v2 ----
 async def set_level_role_set(pool: asyncpg.Pool, guild_id: int, level: int, add_role_ids: list[int], remove_role_ids: list[int]) -> None:
     add_role_ids = [int(x) for x in add_role_ids if int(x) > 0]

@@ -209,36 +209,6 @@ async def _update_settings(pool: asyncpg.Pool, guild_id: int, **updates: Any) ->
     sql = f"UPDATE guild_settings SET {sets} WHERE guild_id=$1"
     await pool.execute(sql, guild_id, *vals)
 
-
-async def _filter_valid_role_ids(pool: asyncpg.Pool, guild_id: int, role_ids: list[int]) -> list[int]:
-    role_ids = [int(x) for x in role_ids if int(x) > 0]
-    if not role_ids:
-        return []
-    rows = await pool.fetch(
-        "SELECT role_id FROM guild_roles_cache WHERE guild_id=$1 AND role_id = ANY($2::BIGINT[])",
-        int(guild_id), role_ids,
-    )
-    valid = {int(r["role_id"]) for r in rows}
-    return [rid for rid in role_ids if int(rid) in valid]
-
-
-async def _enqueue_role_sync_all_members(pool: asyncpg.Pool, guild_id: int) -> int:
-    rows = await pool.fetch(
-        "SELECT user_id FROM guild_members_cache WHERE guild_id=$1 AND in_guild=TRUE",
-        int(guild_id),
-    )
-    user_ids = [int(r["user_id"]) for r in rows if r and r["user_id"] is not None]
-    if not user_ids:
-        return 0
-    await pool.executemany(
-        """INSERT INTO role_sync_queue (guild_id, user_id, requested_at, processed_at)
-             VALUES ($1,$2,NOW(),NULL)
-             ON CONFLICT (guild_id, user_id)
-             DO UPDATE SET requested_at=NOW(), processed_at=NULL""",
-        [(int(guild_id), int(uid)) for uid in user_ids],
-    )
-    return len(user_ids)
-
 def _require_admin(request: Request) -> bool:
     return bool(request.session.get("admin_ok"))
 
@@ -499,10 +469,10 @@ async def rules_upsert(
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
-    add_ids = await _filter_valid_role_ids(pool, int(guild_id), _parse_ids(add_role_ids))
-    rem_ids = await _filter_valid_role_ids(pool, int(guild_id), _parse_ids(remove_role_ids))
+    add_ids = _parse_ids(add_role_ids)
+    rem_ids = _parse_ids(remove_role_ids)
     if not add_ids and not rem_ids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=유효한+추가/제거+역할을+1개+이상+선택하세요", status_code=302)
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=추가/제거+역할+중+하나는+필수", status_code=302)
 
     await pool.execute(
         """INSERT INTO level_role_sets (guild_id, level, add_role_ids, remove_role_ids)
@@ -511,11 +481,8 @@ async def rules_upsert(
         int(guild_id), int(level), add_ids, rem_ids
     )
 
-    queued = await _enqueue_role_sync_all_members(pool, int(guild_id))
-    return RedirectResponse(
-        url=f"/admin?guild_id={guild_id}&msg=규칙+저장+완료(+동기화+대기:{queued}명)",
-        status_code=302,
-    )
+    # optional: request role sync for all members? too heavy; keep manual
+    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=규칙+저장+완료", status_code=302)
 
 @app.post("/admin/rules-delete")
 async def rules_delete(request: Request, guild_id: int = Form(...), level: int = Form(...)):
@@ -523,11 +490,7 @@ async def rules_delete(request: Request, guild_id: int = Form(...), level: int =
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
     await pool.execute("DELETE FROM level_role_sets WHERE guild_id=$1 AND level=$2", int(guild_id), int(level))
-    queued = await _enqueue_role_sync_all_members(pool, int(guild_id))
-    return RedirectResponse(
-        url=f"/admin?guild_id={guild_id}&msg=규칙+삭제+완료(+동기화+대기:{queued}명)",
-        status_code=302,
-    )
+    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=규칙+삭제+완료", status_code=302)
 
 @app.post("/admin/reaction-block-add")
 async def reaction_block_add(
@@ -548,9 +511,9 @@ async def reaction_block_add(
     if not str(channel_id).isdigit():
         return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=채널을+선택하세요", status_code=302)
     cid = int(channel_id)
-    rids = await _filter_valid_role_ids(pool, int(guild_id), _parse_ids(blocked_role_ids))
+    rids = _parse_ids(blocked_role_ids)
     if not rids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=유효한+차단+역할을+선택하세요", status_code=302)
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=차단할+역할을+선택하세요", status_code=302)
 
     await pool.execute(
         """INSERT INTO reaction_blocks (guild_id, channel_id, message_id, blocked_role_id, updated_at)
@@ -603,10 +566,10 @@ async def reaction_role_upsert(
     if not ek:
         return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=이모지를+입력하세요", status_code=302)
 
-    add_ids = await _filter_valid_role_ids(pool, int(guild_id), _parse_ids(add_role_ids))
-    rem_ids = await _filter_valid_role_ids(pool, int(guild_id), _parse_ids(remove_role_ids))
+    add_ids = _parse_ids(add_role_ids)
+    rem_ids = _parse_ids(remove_role_ids)
     if not add_ids and not rem_ids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=유효한+추가/제거+역할을+1개+이상+선택하세요", status_code=302)
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=추가/제거+역할+중+하나는+필수", status_code=302)
 
     await pool.execute(
         """INSERT INTO reaction_role_rules (guild_id, channel_id, message_id, emoji_key, add_role_ids, remove_role_ids, updated_at)
@@ -624,20 +587,14 @@ async def reaction_role_delete(
     request: Request,
     guild_id: int = Form(...),
     message_id: int = Form(...),
-    emoji_key: str = Form(""),
-    emoji: str = Form(""),
+    emoji_key: str = Form(...),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
-    ek = (emoji_key or "").strip()
-    if not ek and emoji:
-        ek = _parse_emoji_key(emoji)
-    if not ek:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=삭제할+반응+이모지+정보가+없어요", status_code=302)
     await pool.execute(
         "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
-        int(guild_id), int(message_id), str(ek)
+        int(guild_id), int(message_id), str(emoji_key)
     )
     return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응역할+삭제+완료", status_code=302)
 
@@ -658,14 +615,7 @@ async def api_roles_search(request: Request, guild_id: int, q: str = ""):
             "SELECT role_id, role_name, position FROM guild_roles_cache WHERE guild_id=$1 ORDER BY position DESC, role_name ASC LIMIT 60",
             int(guild_id)
         )
-    return {"ok": True, "roles": [
-        {
-            "role_id": str(r["role_id"]),
-            "role_name": str(r["role_name"]),
-            "position": int(r["position"] or 0),
-        }
-        for r in rows
-    ]}
+    return {"ok": True, "roles": [dict(r) for r in rows]}
 
 
 @app.get("/admin/api/members_search")
@@ -686,17 +636,7 @@ async def api_members_search(request: Request, guild_id: int, q: str = ""):
                LIMIT 60""",
             int(guild_id)
         )
-        return {"ok": True, "members": [
-            {
-                "user_id": str(r["user_id"]),
-                "username": r["username"],
-                "discriminator": r["discriminator"],
-                "global_name": r["global_name"],
-                "nick": r["nick"],
-                "display_name": r["display_name"],
-            }
-            for r in rows
-        ]}
+        return {"ok": True, "members": [dict(r) for r in rows]}
 
     q_like = f"%{q}%"
     rows = await pool.fetch(
@@ -709,17 +649,7 @@ async def api_members_search(request: Request, guild_id: int, q: str = ""):
            LIMIT 50""",
         int(guild_id), q_like, f"%{q}%"
     )
-    return {"ok": True, "members": [
-        {
-            "user_id": str(r["user_id"]),
-            "username": r["username"],
-            "discriminator": r["discriminator"],
-            "global_name": r["global_name"],
-            "nick": r["nick"],
-            "display_name": r["display_name"],
-        }
-        for r in rows
-    ]}
+    return {"ok": True, "members": [dict(r) for r in rows]}
 
 @app.get("/admin/api/members_list")
 async def api_members_list(request: Request, guild_id: int, limit: int = 200, offset: int = 0):
@@ -746,17 +676,7 @@ async def api_members_by_role(request: Request, guild_id: int, role_id: int):
         "SELECT user_id, username, discriminator, global_name, nick, display_name FROM guild_members_cache WHERE guild_id=$1 AND in_guild=TRUE AND $2 = ANY(role_ids) ORDER BY display_name NULLS LAST, user_id LIMIT 500",
         int(guild_id), int(role_id)
     )
-    return {"ok": True, "members": [
-        {
-            "user_id": str(r["user_id"]),
-            "username": r["username"],
-            "discriminator": r["discriminator"],
-            "global_name": r["global_name"],
-            "nick": r["nick"],
-            "display_name": r["display_name"],
-        }
-        for r in rows
-    ]}
+    return {"ok": True, "members": [dict(r) for r in rows]}
 
 # Health check
 @app.get("/healthz")

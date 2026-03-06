@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import discord
 from discord.ext import commands
 
@@ -36,7 +35,7 @@ class ReactionLockCog(commands.Cog):
                 await self.refresh_all()
             except Exception:
                 log.exception("Reaction lock refresh failed")
-            await asyncio.sleep(float(os.getenv('REACTION_LOCK_REFRESH_SEC', '15') or 15))  # 짧게 갱신
+            await asyncio.sleep(120)  # 2분마다 갱신
 
     async def refresh_all(self) -> None:
         self._locks.clear()
@@ -93,9 +92,6 @@ class ReactionLockCog(commands.Cog):
 
             key = (int(payload.guild_id), int(payload.message_id))
             entry = self._locks.get(key)
-            if not entry:
-                await self.refresh_guild(int(payload.guild_id))
-                entry = self._locks.get(key)
             if not entry:
                 return
             if int(payload.channel_id) != int(entry.get("channel_id", 0)):

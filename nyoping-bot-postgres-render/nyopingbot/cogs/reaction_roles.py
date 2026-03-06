@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import discord
 from discord.ext import commands
 
@@ -40,7 +39,7 @@ class ReactionRolesCog(commands.Cog):
                 await self.refresh_all()
             except Exception:
                 log.exception('Reaction roles refresh failed')
-            await asyncio.sleep(float(os.getenv('REACTION_RULES_REFRESH_SEC', '15') or 15))
+            await asyncio.sleep(60)
 
     async def refresh_all(self) -> None:
         self._rules.clear()
@@ -50,38 +49,63 @@ class ReactionRolesCog(commands.Cog):
             return
 
         for g in getattr(self.bot, 'guilds', []):
+            gid = int(g.id)
             try:
-                await self.refresh_guild(int(g.id))
+                rows = await list_reaction_role_rules(pool, gid)
+                for r in rows:
+                    key = (int(r['guild_id']), int(r['message_id']), str(r['emoji_key']))
+                    self._rules[key] = {
+                        'channel_id': int(r['channel_id']),
+                        'add_ids': set(int(x) for x in (r.get('add_role_ids') or [])),
+                        'rem_ids': set(int(x) for x in (r.get('remove_role_ids') or [])),
+                    }
             except Exception:
-                log.exception('Reaction roles refresh_guild failed for guild %s', getattr(g, 'id', '?'))
+                pass
 
-    async def refresh_guild(self, guild_id: int) -> None:
+            try:
+                blocks = await list_reaction_blocks(pool, gid)
+                for b in blocks:
+                    bkey = (int(b['guild_id']), int(b['message_id']))
+                    self._blocked.setdefault(bkey, set()).add(int(b['blocked_role_id']))
+            except Exception:
+                pass
+
+    async def _fetch_rule_from_db(self, guild_id: int, message_id: int, emoji_key: str) -> dict[str, object] | None:
         pool = getattr(self.bot, 'db_pool', None)
         if not pool:
-            return
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT channel_id, add_role_ids, remove_role_ids
+                   FROM reaction_role_rules
+                   WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3""",
+                int(guild_id), int(message_id), str(emoji_key),
+            )
+        if not row:
+            self._rules.pop((int(guild_id), int(message_id), str(emoji_key)), None)
+            return None
+        entry = {
+            'channel_id': int(row['channel_id']),
+            'add_ids': set(int(x) for x in (row['add_role_ids'] or [])),
+            'rem_ids': set(int(x) for x in (row['remove_role_ids'] or [])),
+        }
+        self._rules[(int(guild_id), int(message_id), str(emoji_key))] = entry
+        return entry
 
-        gid = int(guild_id)
-        stale_rule_keys = [k for k in list(self._rules.keys()) if int(k[0]) == gid]
-        for k in stale_rule_keys:
-            self._rules.pop(k, None)
-
-        stale_block_keys = [k for k in list(self._blocked.keys()) if int(k[0]) == gid]
-        for k in stale_block_keys:
-            self._blocked.pop(k, None)
-
-        rows = await list_reaction_role_rules(pool, gid)
-        for r in rows:
-            key = (int(r['guild_id']), int(r['message_id']), str(r['emoji_key']))
-            self._rules[key] = {
-                'channel_id': int(r['channel_id']),
-                'add_ids': set(int(x) for x in (r.get('add_role_ids') or [])),
-                'rem_ids': set(int(x) for x in (r.get('remove_role_ids') or [])),
-            }
-
-        blocks = await list_reaction_blocks(pool, gid)
-        for b in blocks:
-            bkey = (int(b['guild_id']), int(b['message_id']))
-            self._blocked.setdefault(bkey, set()).add(int(b['blocked_role_id']))
+    async def _fetch_blocks_from_db(self, guild_id: int, message_id: int) -> set[int]:
+        pool = getattr(self.bot, 'db_pool', None)
+        if not pool:
+            return set()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT blocked_role_id
+                   FROM reaction_blocks
+                   WHERE guild_id=$1 AND message_id=$2""",
+                int(guild_id), int(message_id),
+            )
+        blocked = {int(r['blocked_role_id']) for r in rows}
+        self._blocked[(int(guild_id), int(message_id))] = blocked
+        return blocked
 
     def _member_has_blocked_role(self, member: discord.Member, blocked: set[int]) -> bool:
         try:
@@ -96,39 +120,75 @@ class ReactionRolesCog(commands.Cog):
         except Exception:
             return
 
+    def _is_manageable_role(self, guild: discord.Guild, role: discord.Role | None) -> bool:
+        if role is None:
+            return False
+        if role.is_default() or getattr(role, 'managed', False):
+            return False
+        me = guild.me
+        if me is None:
+            return False
+        try:
+            return me.guild_permissions.manage_roles and me.top_role > role
+        except Exception:
+            return False
+
     async def _apply_role_change(self, member: discord.Member, add_ids: set[int], rem_ids: set[int]) -> None:
-        me = member.guild.me
-        top_pos = int(getattr(getattr(me, 'top_role', None), 'position', -1) or -1)
+        guild = member.guild
+        current_ids = {int(r.id) for r in getattr(member, 'roles', [])}
 
-        def manageable(role: discord.Role | None) -> bool:
-            if role is None:
-                return False
-            if getattr(role, 'is_default', lambda: False)():
-                return False
-            return int(getattr(role, 'position', -1) or -1) < top_pos
-
-        cur_roles = list(member.roles)
-        cur_ids = {r.id for r in cur_roles}
-
-        kept = [r for r in cur_roles if r.id not in rem_ids or not manageable(r)]
-
-        for rid in add_ids:
-            if rid in cur_ids:
+        remove_roles: list[discord.Role] = []
+        for rid in rem_ids:
+            if rid not in current_ids:
                 continue
-            role = member.guild.get_role(int(rid))
-            if manageable(role):
-                kept.append(role)
+            role = guild.get_role(int(rid))
+            if self._is_manageable_role(guild, role):
+                remove_roles.append(role)  # type: ignore[arg-type]
 
-        uniq = {r.id: r for r in kept}
-        final_roles = sorted(uniq.values(), key=lambda r: r.position)
+        add_roles: list[discord.Role] = []
+        for rid in add_ids:
+            if rid in current_ids:
+                continue
+            role = guild.get_role(int(rid))
+            if self._is_manageable_role(guild, role):
+                add_roles.append(role)  # type: ignore[arg-type]
+
+        if remove_roles:
+            try:
+                await member.remove_roles(*remove_roles, reason='반응 역할 규칙 적용(제거)')
+            except discord.Forbidden:
+                return
+            except discord.HTTPException:
+                return
+
+        if add_roles:
+            try:
+                await member.add_roles(*add_roles, reason='반응 역할 규칙 적용(추가)')
+            except discord.Forbidden:
+                return
+            except discord.HTTPException:
+                return
+
+    async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
+        member = getattr(payload, 'member', None)
+        if member is not None and not getattr(member, 'bot', False):
+            return member
+
+        guild = self.bot.get_guild(int(payload.guild_id)) if payload.guild_id is not None else None
+        if guild is None:
+            return None
+
+        member = guild.get_member(int(payload.user_id))
+        if member is not None and not getattr(member, 'bot', False):
+            return member
 
         try:
-            await member.edit(roles=final_roles, reason='반응 역할 규칙 적용')
-        except discord.Forbidden:
-            log.warning('Reaction role apply forbidden for member=%s guild=%s', getattr(member, 'id', '?'), getattr(member.guild, 'id', '?'))
-            return
-        except discord.HTTPException:
-            return
+            member = await guild.fetch_member(int(payload.user_id))
+            if member is not None and not getattr(member, 'bot', False):
+                return member
+        except Exception:
+            return None
+        return None
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
@@ -139,27 +199,17 @@ class ReactionRolesCog(commands.Cog):
                 return
 
             ekey = _emoji_key(payload.emoji)
-            key = (int(payload.guild_id), int(payload.message_id), str(ekey))
-            entry = self._rules.get(key)
-            bkey = (int(payload.guild_id), int(payload.message_id))
-            blocked = self._blocked.get(bkey, set())
-            if not entry and not blocked:
-                await self.refresh_guild(int(payload.guild_id))
-                entry = self._rules.get(key)
-                blocked = self._blocked.get(bkey, set())
-            if not entry and not blocked:
+            entry = await self._fetch_rule_from_db(int(payload.guild_id), int(payload.message_id), str(ekey))
+            if not entry:
                 return
-            if entry and int(payload.channel_id) != int(entry.get('channel_id', 0)):
+            if int(payload.channel_id) != int(entry.get('channel_id', 0)):
                 return
 
-            member = getattr(payload, 'member', None)
+            member = await self._resolve_member(payload)
             if member is None:
-                guild = self.bot.get_guild(int(payload.guild_id))
-                if guild:
-                    member = guild.get_member(int(payload.user_id))
-            if member is None or getattr(member, 'bot', False):
                 return
 
+            blocked = await self._fetch_blocks_from_db(int(payload.guild_id), int(payload.message_id))
             if blocked and self._member_has_blocked_role(member, blocked):
                 channel = self.bot.get_channel(int(payload.channel_id))
                 if channel:

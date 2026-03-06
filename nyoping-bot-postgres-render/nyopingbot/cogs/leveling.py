@@ -17,6 +17,7 @@ from ..db import (
     get_checkin_count,
     update_checkin_streak,
     get_checkin_streak,
+    increment_checkin_streak_test_mode,
     list_level_role_sets,
     top_users_current_members,
     count_ranked_members,
@@ -234,16 +235,17 @@ class LevelingCog(commands.Cog):
                 return
             streak = await update_checkin_streak(self.bot.db_pool, interaction.guild.id, interaction.user.id, today, yesterday)
         else:
-            # 테스트 모드(제한 OFF)에서는 streak를 바꾸지 않음
-            streak_info = await get_checkin_streak(self.bot.db_pool, interaction.guild.id, interaction.user.id)
-            streak = int(streak_info.get("streak") or 0)
+            # 테스트 모드(제한 OFF)에서는 같은 날 여러 번 출석해도 streak/보너스가 오르도록 허용
+            streak = await increment_checkin_streak_test_mode(
+                self.bot.db_pool, interaction.guild.id, interaction.user.id, today
+            )
 
         base_xp = int(settings.get("checkin_xp", 50))
         bonus_per_day = int(settings.get("checkin_streak_bonus_per_day", 0))
         bonus_cap = int(settings.get("checkin_streak_bonus_cap", 0))
 
         bonus = 0
-        if limit_enabled and bonus_per_day > 0 and streak > 1:
+        if bonus_per_day > 0 and streak > 1:
             bonus = (streak - 1) * bonus_per_day
             if bonus_cap > 0:
                 bonus = min(bonus, bonus_cap)

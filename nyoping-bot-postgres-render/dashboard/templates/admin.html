@@ -221,7 +221,7 @@
         <button class="btn secondary" type="button" onclick="clearRuleSelection()">선택 비우기</button>
       </div>
       <div class="small">추가/제거 둘 다 비어있으면 저장되지 않아요. 한쪽만 비어도 OK!</div>
-      <div class="small muted" style="margin-top:6px">레벨 역할은 Discord 역할 ID가 매우 길어서, 저장할 때 숫자 반올림이 생기면 안 돼요. 이 버전은 문자열 그대로 저장하도록 고쳤어요.</div>
+      <div class="small muted" style="margin-top:6px">현재 규칙에서 역할 이름이 잠깐 물음표로 보여도, 페이지가 열리면 자동으로 역할 이름을 다시 불러와서 바꿔줘요.</div>
     </form>
 
     <h3 style="margin-top:18px">현재 규칙</h3>
@@ -334,7 +334,7 @@
     특정 메시지의 특정 반응을 누르면 역할을 <b>추가</b>하거나 <b>제거</b>할 수 있어요.
     추가/제거 둘 다 동시에 설정할 수 있고, 하나만 설정해도 됩니다.
   </div>
-  <div class="small muted" style="margin-top:6px">삭제 버튼은 현재 화면에서 바로 처리되고, 반응 이모지도 현재 규칙 표에 표시돼요.</div>
+  <div class="small muted" style="margin-top:6px">삭제 버튼은 페이지 이동 대신 현재 화면에서 바로 처리되도록 바꿨어요.</div>
 
   <form method="post" action="/admin/reaction-role-upsert" onsubmit="return rrValidate()">
     <input type="hidden" name="guild_id" value="{{ guild_id }}">
@@ -397,7 +397,7 @@
       <tr>
         <td>{{ _channel_map.get(rr.channel_id, _channel_map.get(rr.channel_id|string, rr.channel_id)) }}</td>
         <td class="mono">{{ rr.message_id }}</td>
-        <td class="mono">{{ rr.emoji_key }}</td>
+        <td class="mono">{{ rr.emoji_key or rr.emoji or "-" }}</td>
         <td class="muted">
           {% for rid in rr.add_role_ids|default([]) %}
             <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }}</span> <span class="muted">({{ rid }})</span></span>
@@ -411,18 +411,8 @@
         <td>
           <form method="post" action="/admin/reaction-role-delete" style="margin:0" class="ajax-delete">
             <input type="hidden" name="guild_id" value="{{ guild_id }}">
-            <input type="hidden" name="rule_id" value="{{ rr.rule_id|default(rr.id)|default(rr.reaction_role_id)|default(rr.row_id)|default('') }}">
-            <input type="hidden" name="id" value="{{ rr.id|default(rr.rule_id)|default(rr.reaction_role_id)|default(rr.row_id)|default('') }}">
-            <input type="hidden" name="reaction_role_id" value="{{ rr.reaction_role_id|default(rr.rule_id)|default(rr.id)|default(rr.row_id)|default('') }}">
-            <input type="hidden" name="row_id" value="{{ rr.row_id|default(rr.rule_id)|default(rr.id)|default(rr.reaction_role_id)|default('') }}">
-            <input type="hidden" name="channel_id" value="{{ rr.channel_id|default('') }}">
-            <input type="hidden" name="message_id" value="{{ rr.message_id|default('') }}">
-            <input type="hidden" name="message" value="{{ rr.message_id|default('') }}">
-            <input type="hidden" name="emoji_key" value="{{ rr.emoji_key|default(rr.emoji)|default('') }}">
-            <input type="hidden" name="emoji" value="{{ rr.emoji_key|default(rr.emoji)|default('') }}">
-            <input type="hidden" name="add_role_ids" value="{{ rr.add_role_ids|join(',') if rr.add_role_ids else (rr.add_role_id|default(rr.role_id)|default('')) }}">
-            <input type="hidden" name="remove_role_ids" value="{{ rr.remove_role_ids|join(',') if rr.remove_role_ids else (rr.remove_role_id|default('')) }}">
-            <input type="hidden" name="role_id" value="{{ rr.role_id|default(rr.add_role_id)|default(rr.remove_role_id)|default('') }}">
+            <input type="hidden" name="message_id" value="{{ rr.message_id }}">
+            <input type="hidden" name="emoji_key" value="{{ rr.emoji_key }}">
             <button class="btn danger" type="submit">삭제</button>
           </form>
         </td>
@@ -555,7 +545,7 @@ async function renderRolePickList(q){
 }
 
 function toggleRuleRole(roleId, roleName){
-  roleId = String(roleId);
+  roleId = Number(roleId);
   if (rolePickMode==='add'){
     if (selectedAdd.includes(roleId)) selectedAdd = selectedAdd.filter(x=>x!==roleId);
     else selectedAdd.push(roleId);

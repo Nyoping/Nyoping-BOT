@@ -37,30 +37,20 @@ def compute_expected_and_managed_roles(rules: list[dict], level: int) -> tuple[s
 async def sync_member_roles(member: discord.Member, expected: set[int], managed: set[int], *, reason: str) -> None:
     """Ensure the member's roles match expected, but only for managed roles.
 
-    Uses a single member.edit call, but skips roles the bot cannot manage so that
-    one high role does not make the whole sync fail.
+    Optimized: do a single REST call via member.edit(roles=...).
     """
     try:
-        me = member.guild.me
-        top_pos = int(getattr(getattr(me, 'top_role', None), 'position', -1) or -1)
+        # Keep non-managed roles
+        keep_roles = [r for r in member.roles if r.id not in managed]
 
-        def manageable(role: discord.Role | None) -> bool:
-            if role is None:
-                return False
-            if getattr(role, 'is_default', lambda: False)():
-                return False
-            return int(getattr(role, 'position', -1) or -1) < top_pos
-
-        # Keep non-managed roles, and also keep managed roles that the bot cannot touch.
-        keep_roles = [r for r in member.roles if r.id not in managed or not manageable(r)]
-
-        # Add expected managed roles that the bot can actually grant.
+        # Add expected managed roles
         managed_roles = []
         for rid in expected:
             role = member.guild.get_role(int(rid))
-            if manageable(role):
+            if role:
                 managed_roles.append(role)
 
+        # Combine + dedup + sort by position
         uniq = {r.id: r for r in (keep_roles + managed_roles)}
         final_roles = sorted(uniq.values(), key=lambda r: r.position)
 
