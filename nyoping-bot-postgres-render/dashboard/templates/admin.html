@@ -221,6 +221,7 @@
         <button class="btn secondary" type="button" onclick="clearRuleSelection()">선택 비우기</button>
       </div>
       <div class="small">추가/제거 둘 다 비어있으면 저장되지 않아요. 한쪽만 비어도 OK!</div>
+      <div class="small muted" style="margin-top:6px">현재 규칙에서 역할 이름이 잠깐 물음표로 보여도, 페이지가 열리면 자동으로 역할 이름을 다시 불러와서 바꿔줘요.</div>
     </form>
 
     <h3 style="margin-top:18px">현재 규칙</h3>
@@ -235,16 +236,16 @@
           <td><span class="pill">Lv.{{ r.level }}</span></td>
           <td class="muted">
             {% for rid in r.add_role_ids %}
-              <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "?"))) }} <span class="muted">({{ rid }})</span></span>
+              <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "?"))) }}</span> <span class="muted">({{ rid }})</span></span>
             {% endfor %}
           </td>
           <td class="muted">
             {% for rid in r.remove_role_ids %}
-              <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "?"))) }} <span class="muted">({{ rid }})</span></span>
+              <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "?"))) }}</span> <span class="muted">({{ rid }})</span></span>
             {% endfor %}
           </td>
           <td>
-            <form method="post" action="/admin/rules-delete" style="margin:0">
+            <form method="post" action="/admin/rules-delete" style="margin:0" class="ajax-delete">
               <input type="hidden" name="guild_id" value="{{ guild_id }}">
               <input type="hidden" name="level" value="{{ r.level }}">
               <button class="btn danger" type="submit">삭제</button>
@@ -310,9 +311,9 @@
       <tr>
         <td>{{ _channel_map.get(b.channel_id, _channel_map.get(b.channel_id|string, b.channel_id)) }}</td>
         <td class="mono">{{ b.message_id }}</td>
-        <td>{{ _role_map.get(b.blocked_role_id, _role_map.get(b.blocked_role_id|string, _role_map.get(b.blocked_role_id|int, "?"))) }} ({{ b.blocked_role_id }})</td>
+        <td><span class="pill role-pill" data-role-id="{{ b.blocked_role_id }}"><span class="role-name">{{ _role_map.get(b.blocked_role_id, _role_map.get(b.blocked_role_id|string, _role_map.get(b.blocked_role_id|int, "?"))) }}</span> <span class="muted">({{ b.blocked_role_id }})</span></span></td>
         <td>
-          <form method="post" action="/admin/reaction-block-delete">
+          <form method="post" action="/admin/reaction-block-delete" class="ajax-delete">
             <input type="hidden" name="guild_id" value="{{ guild_id }}">
             <input type="hidden" name="message_id" value="{{ b.message_id }}">
             <input type="hidden" name="role_id" value="{{ b.blocked_role_id }}">
@@ -333,6 +334,7 @@
     특정 메시지의 특정 반응을 누르면 역할을 <b>추가</b>하거나 <b>제거</b>할 수 있어요.
     추가/제거 둘 다 동시에 설정할 수 있고, 하나만 설정해도 됩니다.
   </div>
+  <div class="small muted" style="margin-top:6px">삭제 버튼은 페이지 이동 대신 현재 화면에서 바로 처리되도록 바꿨어요.</div>
 
   <form method="post" action="/admin/reaction-role-upsert" onsubmit="return rrValidate()">
     <input type="hidden" name="guild_id" value="{{ guild_id }}">
@@ -398,19 +400,28 @@
         <td>{{ rr.emoji }}</td>
         <td class="muted">
           {% for rid in rr.add_role_ids|default([]) %}
-            <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }} <span class="muted">({{ rid }})</span></span>
+            <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }}</span> <span class="muted">({{ rid }})</span></span>
           {% endfor %}
         </td>
         <td class="muted">
           {% for rid in rr.remove_role_ids|default([]) %}
-            <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }} <span class="muted">({{ rid }})</span></span>
+            <span class="pill role-pill" data-role-id="{{ rid }}"><span class="role-name">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }}</span> <span class="muted">({{ rid }})</span></span>
           {% endfor %}
         </td>
         <td>
-          <form method="post" action="/admin/reaction-role-delete" style="margin:0">
+          <form method="post" action="/admin/reaction-role-delete" style="margin:0" class="ajax-delete">
             <input type="hidden" name="guild_id" value="{{ guild_id }}">
-            <input type="hidden" name="message_id" value="{{ rr.message_id }}">
-            <input type="hidden" name="emoji" value="{{ rr.emoji }}">
+            <input type="hidden" name="rule_id" value="{{ rr.rule_id|default(rr.id)|default(rr.reaction_role_id)|default(rr.row_id)|default('') }}">
+            <input type="hidden" name="id" value="{{ rr.id|default(rr.rule_id)|default(rr.reaction_role_id)|default(rr.row_id)|default('') }}">
+            <input type="hidden" name="reaction_role_id" value="{{ rr.reaction_role_id|default(rr.rule_id)|default(rr.id)|default(rr.row_id)|default('') }}">
+            <input type="hidden" name="row_id" value="{{ rr.row_id|default(rr.rule_id)|default(rr.id)|default(rr.reaction_role_id)|default('') }}">
+            <input type="hidden" name="channel_id" value="{{ rr.channel_id|default('') }}">
+            <input type="hidden" name="message_id" value="{{ rr.message_id|default('') }}">
+            <input type="hidden" name="message" value="{{ rr.message_id|default('') }}">
+            <input type="hidden" name="emoji" value="{{ rr.emoji|default('') }}">
+            <input type="hidden" name="add_role_ids" value="{{ rr.add_role_ids|join(',') if rr.add_role_ids else (rr.add_role_id|default(rr.role_id)|default('')) }}">
+            <input type="hidden" name="remove_role_ids" value="{{ rr.remove_role_ids|join(',') if rr.remove_role_ids else (rr.remove_role_id|default('')) }}">
+            <input type="hidden" name="role_id" value="{{ rr.role_id|default(rr.add_role_id)|default(rr.remove_role_id)|default('') }}">
             <button class="btn danger" type="submit">삭제</button>
           </form>
         </td>
@@ -852,6 +863,83 @@ function rrValidate(){
   if (rrSelectedAdd.length===0 && rrSelectedRemove.length===0){ alert('추가/제거 역할 중 하나는 필요해요.'); return false; }
   return true;
 }
+
+
+async function preloadRoleMap(){
+  const gid = "{{ guild_id or '' }}";
+  if (!gid) return;
+  const need = Array.from(document.querySelectorAll('.role-pill')).some(el=>{
+    const id = String(el.dataset.roleId || '').trim();
+    const name = (el.querySelector('.role-name')?.textContent || '').trim();
+    return id && (!name || name==='?' || name===id || name==='알 수 없는 역할');
+  });
+  if (!need) return;
+  try {
+    await roleSearch('');
+  } catch (e) {
+    console.error('role preload failed', e);
+  }
+  Array.from(document.querySelectorAll('.role-pill')).forEach(el=>{
+    const id = String(el.dataset.roleId || '').trim();
+    const nameEl = el.querySelector('.role-name');
+    if (!id || !nameEl) return;
+    const resolved = roleNameById[id];
+    if (resolved) nameEl.textContent = resolved;
+  });
+}
+
+async function submitAjaxDelete(form){
+  const fd = new FormData(form);
+  const params = new URLSearchParams();
+  for (const [k, v] of fd.entries()){
+    params.append(k, v);
+  }
+  let res;
+  try{
+    res = await fetch(form.action, {
+      method: 'POST',
+      body: params,
+      headers: {'Accept': 'text/html,application/json'}
+    });
+  }catch(err){
+    alert('삭제 요청 전송에 실패했어요.\n네트워크 상태를 확인해 주세요.');
+    return;
+  }
+
+  if (res.redirected && res.url){
+    window.location.href = res.url;
+    return;
+  }
+
+  if (res.ok){
+    window.location.reload();
+    return;
+  }
+
+  let detail = '';
+  try{
+    const data = await res.json();
+    detail = data?.detail ? JSON.stringify(data.detail) : JSON.stringify(data);
+  }catch(_e){
+    try{
+      detail = (await res.text()).slice(0, 300);
+    }catch(_e2){}
+  }
+  alert('삭제에 실패했어요.\n' + (detail || ('HTTP ' + res.status)));
+}
+
+document.addEventListener('submit', function(e){
+  const form = e.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  if (!form.classList.contains('ajax-delete')) return;
+  e.preventDefault();
+  submitAjaxDelete(form);
+});
+
+document.addEventListener('DOMContentLoaded', function(){
+  preloadRoleMap();
+});
+
 </script>
 </body>
 </html>
