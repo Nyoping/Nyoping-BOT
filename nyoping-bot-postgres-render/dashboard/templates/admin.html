@@ -224,6 +224,7 @@
     </form>
 
     <h3 style="margin-top:18px">현재 규칙</h3>
+    {% set _role_map = role_name_map|default({}) %}
     <table>
       <thead>
         <tr><th>레벨</th><th>추가</th><th>제거</th><th></th></tr>
@@ -234,12 +235,12 @@
           <td><span class="pill">Lv.{{ r.level }}</span></td>
           <td class="muted">
             {% for rid in r.add_role_ids %}
-              <span class="pill">{{ role_name_map.get(rid, "?") }} <span class="muted">({{ rid }})</span></span>
+              <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "?"))) }} <span class="muted">({{ rid }})</span></span>
             {% endfor %}
           </td>
           <td class="muted">
             {% for rid in r.remove_role_ids %}
-              <span class="pill">{{ role_name_map.get(rid, "?") }} <span class="muted">({{ rid }})</span></span>
+              <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, "?"))) }} <span class="muted">({{ rid }})</span></span>
             {% endfor %}
           </td>
           <td>
@@ -300,14 +301,16 @@
   </form>
 
   <h3 style="margin:14px 0 8px">현재 규칙</h3>
+  {% set _role_map = role_name_map|default({}) %}
+  {% set _channel_map = channel_name_map|default({}) %}
   <table>
     <thead><tr><th>채널</th><th>메시지ID</th><th>차단 역할</th><th></th></tr></thead>
     <tbody>
     {% for b in reaction_blocks %}
       <tr>
-        <td>{{ channel_name_map.get(b.channel_id, b.channel_id) }}</td>
+        <td>{{ _channel_map.get(b.channel_id, _channel_map.get(b.channel_id|string, b.channel_id)) }}</td>
         <td class="mono">{{ b.message_id }}</td>
-        <td>{{ role_name_map.get(b.blocked_role_id, "?") }} ({{ b.blocked_role_id }})</td>
+        <td>{{ _role_map.get(b.blocked_role_id, _role_map.get(b.blocked_role_id|string, _role_map.get(b.blocked_role_id|int, "?"))) }} ({{ b.blocked_role_id }})</td>
         <td>
           <form method="post" action="/admin/reaction-block-delete">
             <input type="hidden" name="guild_id" value="{{ guild_id }}">
@@ -318,6 +321,104 @@
         </td>
       </tr>
     {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+
+
+<div class="card">
+  <h2>반응 역할 추가/제거</h2>
+  <div class="small">
+    특정 메시지의 특정 반응을 누르면 역할을 <b>추가</b>하거나 <b>제거</b>할 수 있어요.
+    추가/제거 둘 다 동시에 설정할 수 있고, 하나만 설정해도 됩니다.
+  </div>
+
+  <form method="post" action="/admin/reaction-role-upsert" onsubmit="return rrValidate()">
+    <input type="hidden" name="guild_id" value="{{ guild_id }}">
+
+    <div class="row">
+      <div class="col">
+        <label>채널</label>
+        {% if channels and channels|length > 0 %}
+          <select name="channel_id" id="rrChannel">
+            <option value="">채널 선택</option>
+            {% for c in channels %}
+              <option value="{{ c.channel_id }}">{{ c.channel_name }} ({{ c.channel_id }})</option>
+            {% endfor %}
+          </select>
+        {% else %}
+          <input name="channel_id" id="rrChannel" placeholder="채널 ID (예: 123...)">
+          <div class="small muted">채널 목록 캐시가 아직 없어요. 채널 ID를 직접 넣어도 됩니다.</div>
+        {% endif %}
+      </div>
+      <div class="col">
+        <label>메시지 링크/ID</label>
+        <input name="message" id="rrMessage" placeholder="메시지 링크 또는 숫자 ID">
+      </div>
+      <div class="col">
+        <label>반응 이모지</label>
+        <input name="emoji" id="rrEmoji" placeholder="예: ✅ 또는 <:name:id>">
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <div class="col">
+        <label>추가할 역할</label>
+        <input id="rrAddRoleSearch" placeholder="여기 클릭 후 추가 역할 검색/선택" onfocus="rrSetMode('add')" oninput="rrFilter()" autocomplete="off">
+        <div id="rrAddChips" class="chips"></div>
+        <input type="hidden" name="add_role_ids" id="rrAddRoleIds">
+      </div>
+      <div class="col">
+        <label>제거할 역할</label>
+        <input id="rrRemoveRoleSearch" placeholder="여기 클릭 후 제거 역할 검색/선택" onfocus="rrSetMode('remove')" oninput="rrFilter()" autocomplete="off">
+        <div id="rrRemoveChips" class="chips"></div>
+        <input type="hidden" name="remove_role_ids" id="rrRemoveRoleIds">
+      </div>
+    </div>
+
+    <div id="rrList" class="list" style="margin-top:8px; display:none"></div>
+
+    <div class="btnrow" style="margin-top:10px">
+      <button class="btn" type="submit">규칙 저장</button>
+      <button class="btn secondary" type="button" onclick="rrClear()">선택 비우기</button>
+    </div>
+  </form>
+
+  <h3 style="margin:14px 0 8px">현재 규칙</h3>
+  {% set _role_map = role_name_map|default({}) %}
+  {% set _channel_map = channel_name_map|default({}) %}
+  <table>
+    <thead><tr><th>채널</th><th>메시지ID</th><th>이모지</th><th>추가 역할</th><th>제거 역할</th><th></th></tr></thead>
+    <tbody>
+    {% for rr in reaction_role_rules|default([]) %}
+      <tr>
+        <td>{{ _channel_map.get(rr.channel_id, _channel_map.get(rr.channel_id|string, rr.channel_id)) }}</td>
+        <td class="mono">{{ rr.message_id }}</td>
+        <td>{{ rr.emoji }}</td>
+        <td class="muted">
+          {% for rid in rr.add_role_ids|default([]) %}
+            <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }} <span class="muted">({{ rid }})</span></span>
+          {% endfor %}
+        </td>
+        <td class="muted">
+          {% for rid in rr.remove_role_ids|default([]) %}
+            <span class="pill">{{ _role_map.get(rid, _role_map.get(rid|string, _role_map.get(rid|int, rid))) }} <span class="muted">({{ rid }})</span></span>
+          {% endfor %}
+        </td>
+        <td>
+          <form method="post" action="/admin/reaction-role-delete" style="margin:0">
+            <input type="hidden" name="guild_id" value="{{ guild_id }}">
+            <input type="hidden" name="message_id" value="{{ rr.message_id }}">
+            <input type="hidden" name="emoji" value="{{ rr.emoji }}">
+            <button class="btn danger" type="submit">삭제</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    {% if (reaction_role_rules|default([]))|length == 0 %}
+      <tr><td colspan="6" class="muted">아직 등록된 반응 역할 규칙이 없어요.</td></tr>
+    {% endif %}
     </tbody>
   </table>
 </div>
@@ -371,11 +472,15 @@ let roleNameById = {};
 async function roleSearch(q){
   const gid = "{{ guild_id or '' }}";
   if (!gid) return [];
-  const res = await fetch(`/admin/api/roles_search?guild_id=${gid}&q=${encodeURIComponent(q||"" )}`);
-  const data = await res.json();
-  if (data.ok){
-    (data.roles||[]).forEach(r=>{ roleNameById[String(r.role_id)] = r.role_name; });
-    return data.roles||[];
+  try{
+    const res = await fetch(`/admin/api/roles_search?guild_id=${gid}&q=${encodeURIComponent(q||"")}`);
+    const data = await res.json();
+    if (data.ok){
+      (data.roles||[]).forEach(r=>{ roleNameById[String(r.role_id)] = r.role_name; });
+      return data.roles||[];
+    }
+  }catch(e){
+    console.error('roles_search failed', e);
   }
   return [];
 }
@@ -498,9 +603,15 @@ let userTimer = null;
 async function openUserPicker(){
   const gid = "{{ guild_id or '' }}";
   if (!gid) return;
-  const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=`);
-  const data = await res.json();
-  if (data.ok) showUserResults(data.members||[]);
+  try{
+    const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=`);
+    const data = await res.json();
+    if (data.ok) showUserResults(data.members||[]);
+    else showUserResults([]);
+  }catch(e){
+    console.error('members_search failed', e);
+    showUserResults([]);
+  }
 }
 
 function showUserResults(list){
@@ -538,18 +649,30 @@ async function searchUsers(){
   if (userTimer) clearTimeout(userTimer);
   userTimer = setTimeout(async ()=>{
     if (q.length<1){ openUserPicker(); return; }
-    const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    if (data.ok) showUserResults(data.members||[]);
+    try{
+      const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data.ok) showUserResults(data.members||[]);
+      else showUserResults([]);
+    }catch(e){
+      console.error('members_search failed', e);
+      showUserResults([]);
+    }
   }, 250);
 }
 
 async function loadAllMembers(){
   const gid = "{{ guild_id or '' }}";
   if (!gid) return;
-  const res = await fetch(`/admin/api/members_list?guild_id=${gid}&limit=200&offset=0`);
-  const data = await res.json();
-  if (data.ok) showUserResults(data.members||[]);
+  try{
+    const res = await fetch(`/admin/api/members_list?guild_id=${gid}&limit=200&offset=0`);
+    const data = await res.json();
+    if (data.ok) showUserResults(data.members||[]);
+    else showUserResults([]);
+  }catch(e){
+    console.error('members_list failed', e);
+    showUserResults([]);
+  }
 }
 
 // ---- Role target picker ----
@@ -729,6 +852,6 @@ function rrValidate(){
   if (rrSelectedAdd.length===0 && rrSelectedRemove.length===0){ alert('추가/제거 역할 중 하나는 필요해요.'); return false; }
   return true;
 }
-/script>
+</script>
 </body>
 </html>
