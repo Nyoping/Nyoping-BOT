@@ -197,7 +197,7 @@ class LevelingCog(commands.Cog):
     )
     async def checkin(self, interaction: discord.Interaction):
         if not interaction.guild:
-            await interaction.response.send_message("길드에서만 사용 가능해요.", ephemeral=True)
+            await interaction.followup.send("길드에서만 사용 가능해요.", ephemeral=True)
             return
 
         # Quick ack to avoid "응답하지 않았어요" (in case DB/network is slow)
@@ -272,6 +272,7 @@ class LevelingCog(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("길드에서만 사용 가능해요.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         xp = await get_user_xp(self.bot.db_pool, interaction.guild.id, interaction.user.id)
         lvl = xp_to_level(xp)
         c = await get_checkin_count(self.bot.db_pool, interaction.guild.id, interaction.user.id)

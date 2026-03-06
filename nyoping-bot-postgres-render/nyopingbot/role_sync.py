@@ -33,30 +33,29 @@ def compute_expected_and_managed_roles(rules: list[dict], level: int) -> tuple[s
 
     return expected, managed
 
+
 async def sync_member_roles(member: discord.Member, expected: set[int], managed: set[int], *, reason: str) -> None:
-    """Ensure the member's roles match expected, but only for managed roles."""
-    # Current role ids
-    cur_ids = {r.id for r in member.roles}
+    """Ensure the member's roles match expected, but only for managed roles.
 
-    # Roles to remove: any managed role currently on member but not expected
-    to_remove = [r for r in member.roles if r.id in managed and r.id not in expected]
-
-    # Roles to add: expected roles missing on member
-    to_add: list[discord.Role] = []
-    for rid in expected:
-        if rid in cur_ids:
-            continue
-        role = member.guild.get_role(int(rid))
-        if role:
-            to_add.append(role)
-
+    Optimized: do a single REST call via member.edit(roles=...).
+    """
     try:
-        if to_remove:
-            await member.remove_roles(*to_remove, reason=reason)
-        if to_add:
-            await member.add_roles(*to_add, reason=reason)
+        # Keep non-managed roles
+        keep_roles = [r for r in member.roles if r.id not in managed]
+
+        # Add expected managed roles
+        managed_roles = []
+        for rid in expected:
+            role = member.guild.get_role(int(rid))
+            if role:
+                managed_roles.append(role)
+
+        # Combine + dedup + sort by position
+        uniq = {r.id: r for r in (keep_roles + managed_roles)}
+        final_roles = sorted(uniq.values(), key=lambda r: r.position)
+
+        await member.edit(roles=final_roles, reason=reason)
     except discord.Forbidden:
-        # Bot role hierarchy / permissions issue
         return
     except discord.HTTPException:
         return

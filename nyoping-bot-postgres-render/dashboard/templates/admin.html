@@ -30,6 +30,7 @@
     th{color:#a5b4fc}
     .pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#0b1220;border:1px solid #2b3a60}
     .muted{color:#94a3b8}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
     .danger{background:#ef4444}
     .secondary{background:#334155}
     .btnrow{display:flex;gap:8px;flex-wrap:wrap}
@@ -133,8 +134,8 @@
     <div id="userPicker" style="margin-top:10px">
       <label>유저 검색 (닉네임/ID)</label>
       <div class="row">
-        <input id="userSearch" placeholder="예: nyoping 또는 123..." oninput="searchUsers()" autocomplete="off">
-        <button type="button" class="btn secondary" onclick="loadAllMembers()">+검색</button>
+        <input id="userSearch" placeholder="예: nyoping 또는 123..." onfocus="openUserPicker()" oninput="searchUsers()" autocomplete="off">
+        <button type="button" class="btn secondary" onclick="loadAllMembers()">전체</button>
       </div>
       <div class="small">+검색을 누르면 서버 유저 목록 미리보기가 떠요 (캐시 기준).</div>
       <div id="userResults" class="list" style="margin-top:8px; display:none"></div>
@@ -142,7 +143,7 @@
 
     <div id="rolePicker" style="margin-top:10px; display:none">
       <label>역할 선택</label>
-      <input id="roleSearchForTarget" placeholder="역할 이름 검색" onfocus="ensureRolesLoaded()" oninput="filterRoleTarget()" autocomplete="off">
+      <input id="roleSearchForTarget" placeholder="역할 이름 검색" onfocus="filterRoleTarget()" oninput="filterRoleTarget()" autocomplete="off">
       <div id="roleTargetResults" class="list" style="margin-top:8px; display:none"></div>
       <div class="small">선택한 역할의 모든 유저에게 출석 초기화/레벨 조정이 적용돼요.</div>
     </div>
@@ -158,7 +159,10 @@
           <input type="hidden" name="user_id">
           <input type="hidden" name="role_id">
           <label>날짜(YYYY-MM-DD, 비우면 오늘)</label>
-          <input name="ymd" placeholder="예: 2026-03-06">
+          <input name="ymd" list="ymd_list" placeholder="예: 2026-03-06">
+          <datalist id="ymd_list">
+          {% for d in recent_dates %}<option value="{{ d }}">{% endfor %}
+          </datalist>
           <div class="btnrow" style="margin-top:10px">
             <button class="btn danger" type="submit">출석 초기화 적용</button>
           </div>
@@ -178,7 +182,7 @@
           <div class="btnrow" style="margin-top:10px">
             <button class="btn" type="submit">레벨 적용</button>
           </div>
-          <div class="small">적용 후 역할 동기화는 봇이 천천히 처리해요(레이트리밋 방지).</div>
+          <div class="small">적용 후 역할 동기화는 봇이 처리해요. 현재 대기: {{ pending_role_sync }}건</div>
         </form>
       </div>
     </div>
@@ -230,12 +234,12 @@
           <td><span class="pill">Lv.{{ r.level }}</span></td>
           <td class="muted">
             {% for rid in r.add_role_ids %}
-              <span class="pill">{{ role_name_map.get(rid, rid) }}</span>
+              <span class="pill">{{ role_name_map.get(rid, "?") }} <span class="muted">({{ rid }})</span></span>
             {% endfor %}
           </td>
           <td class="muted">
             {% for rid in r.remove_role_ids %}
-              <span class="pill">{{ role_name_map.get(rid, rid) }}</span>
+              <span class="pill">{{ role_name_map.get(rid, "?") }} <span class="muted">({{ rid }})</span></span>
             {% endfor %}
           </td>
           <td>
@@ -303,7 +307,7 @@
       <tr>
         <td>{{ channel_name_map.get(b.channel_id, b.channel_id) }}</td>
         <td class="mono">{{ b.message_id }}</td>
-        <td>{{ role_name_map.get(b.blocked_role_id, b.blocked_role_id) }}</td>
+        <td>{{ role_name_map.get(b.blocked_role_id, "?") }} ({{ b.blocked_role_id }})</td>
         <td>
           <form method="post" action="/admin/reaction-block-delete">
             <input type="hidden" name="guild_id" value="{{ guild_id }}">
@@ -318,35 +322,64 @@
   </table>
 </div>
 
-  <div class="card">
-    <h2>TOP 10 XP</h2>
-    <div class="small">서버 내 유저만 표시(나간 사람 제외). 닉네임은 캐시 기준이라 처음엔 비어있을 수 있어요.</div>
-    <table>
-      <thead><tr><th>#</th><th>유저ID</th><th>닉네임</th><th>Discord</th><th>XP</th></tr></thead>
-      <tbody>
-      {% for r in top_rows %}
-        <tr>
-          <td>{{ loop.index }}</td>
-          <td>{{ r.user_id }}</td>
-          <td class="muted">{{ r.display_name or r.nick or r.global_name or "-" }}</td>
-          <td class="muted">{{ (r.username or "-") ~ ("#" ~ r.discriminator if r.discriminator and r.discriminator != "0" else "") }}</td>
-          <td>{{ r.xp }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    <div class="small" style="margin-top:10px">총 멤버(캐시 기준): {{ total_members }}명</div>
+  
+<div class="card">
+  <h2>서버 랭킹</h2>
+  <div class="small">서버 내 유저만 표시(나간 사람 제외). 페이지당 50명.</div>
+  <table>
+    <thead><tr><th>#</th><th>유저ID</th><th>닉네임</th><th>Discord</th><th>XP</th></tr></thead>
+    <tbody>
+    {% for r in rank_rows %}
+      <tr>
+        <td>{{ (rank_page-1)*rank_page_size + loop.index }}</td>
+        <td>{{ r.user_id }}</td>
+        <td class="muted">{{ r.display_name or r.nick or r.global_name or "-" }}</td>
+        <td class="muted">{{ (r.username or "-") ~ ("#" ~ r.discriminator if r.discriminator and r.discriminator != "0" else "") }}</td>
+        <td>{{ r.xp }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="row" style="margin-top:12px">
+    <div class="col small">총 멤버(캐시 기준): {{ rank_total }}명</div>
+    <div class="btnrow">
+      {% set last_page = (rank_total // rank_page_size) + (1 if (rank_total % rank_page_size) > 0 else 0) %}
+      {% if rank_page > 1 %}
+        <a class="btn secondary" href="/admin?guild_id={{ guild_id }}&rank_page={{ rank_page-1 }}">이전</a>
+      {% endif %}
+      <span class="pill">{{ rank_page }} / {{ last_page if last_page>0 else 1 }}</span>
+      {% if rank_page < last_page %}
+        <a class="btn secondary" href="/admin?guild_id={{ guild_id }}&rank_page={{ rank_page+1 }}">다음</a>
+      {% endif %}
+    </div>
   </div>
+</div>
+
 
   {% endif %}
 
 </div>
 
 <script>
+
 function escapeHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
-let rolesLoaded = false;
 let roles = [];
+let roleNameById = {};
+
+async function roleSearch(q){
+  const gid = "{{ guild_id or  }}";
+  if (!gid) return [];
+  const res = await fetch(`/admin/api/roles_search?guild_id=${gid}&q=${encodeURIComponent(q||"" )}`);
+  const data = await res.json();
+  if (data.ok){
+    (data.roles||[]).forEach(r=>{ roleNameById[String(r.role_id)] = r.role_name; });
+    return data.roles||[];
+  }
+  return [];
+}
+
 let rolePickMode = 'add';
 let selectedAdd = [];
 let selectedRemove = [];
@@ -371,23 +404,10 @@ function onTargetTypeChange(){
   setTargetLabel(selectedLabel);
 }
 
-async function ensureRolesLoaded(){
-  if (rolesLoaded) return;
-  const gid = "{{ guild_id or '' }}";
-  if (!gid) return;
-  const res = await fetch(`/admin/api/roles_cache?guild_id=${gid}`);
-  const data = await res.json();
-  if (data.ok){
-    roles = data.roles || [];
-    rolesLoaded = true;
-  }
-}
 
 function setRolePickMode(mode){
   rolePickMode = mode;
-  ensureRolesLoaded().then(()=>{
-    renderRolePickList('');
-  });
+  renderRolePickList('');
   document.getElementById('rolePickList').style.display = '';
 }
 
@@ -396,12 +416,13 @@ function filterRoleList(){
   renderRolePickList(q || '');
 }
 
-function renderRolePickList(q){
+async function renderRolePickList(q){
   const box = document.getElementById('rolePickList');
   box.innerHTML = '';
-  const qq = (q||'').toLowerCase();
-  const filtered = roles.filter(r => (r.role_name||'').toLowerCase().includes(qq));
-  filtered.slice(0,200).forEach(r=>{
+  box.innerHTML = "<div class=\"small muted\" style=\"padding:10px\">로딩중...</div>";
+  const filtered = await roleSearch(q||'');
+  box.innerHTML='';
+  (filtered||[]).slice(0,80).forEach(r=>{
     const div = document.createElement('div');
     div.className='item';
     div.textContent = `${r.role_name} (${r.role_id})`;
@@ -433,7 +454,7 @@ function renderChips(){
   const remBox = document.getElementById('removeChips');
   addBox.innerHTML=''; remBox.innerHTML='';
   selectedAdd.forEach(id=>{
-    const name = roles.find(r=>Number(r.role_id)===id)?.role_name || String(id);
+    const name = roleNameById[String(id)] || String(id);
     const chip = document.createElement('span');
     chip.className='chip';
     chip.innerHTML = `<b>+</b> ${name} <span class="x" title="삭제">×</span>`;
@@ -441,7 +462,7 @@ function renderChips(){
     addBox.appendChild(chip);
   });
   selectedRemove.forEach(id=>{
-    const name = roles.find(r=>Number(r.role_id)===id)?.role_name || String(id);
+    const name = roleNameById[String(id)] || String(id);
     const chip = document.createElement('span');
     chip.className='chip';
     chip.innerHTML = `<b>-</b> ${name} <span class="x" title="삭제">×</span>`;
@@ -473,6 +494,14 @@ function validateRuleForm(){
 // ---- User picker ----
 let userResultsBox = document.getElementById('userResults');
 let userTimer = null;
+
+async function openUserPicker(){
+  const gid = "{{ guild_id or  }}";
+  if (!gid) return;
+  const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=`);
+  const data = await res.json();
+  if (data.ok) showUserResults(data.members||[]);
+}
 
 function showUserResults(list){
   userResultsBox.style.display = '';
@@ -508,7 +537,7 @@ async function searchUsers(){
   if (!gid) return;
   if (userTimer) clearTimeout(userTimer);
   userTimer = setTimeout(async ()=>{
-    if (q.length<1){ userResultsBox.style.display='none'; return; }
+    if (q.length<1){ openUserPicker(); return; }
     const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=${encodeURIComponent(q)}`);
     const data = await res.json();
     if (data.ok) showUserResults(data.members||[]);
@@ -524,13 +553,15 @@ async function loadAllMembers(){
 }
 
 // ---- Role target picker ----
-function filterRoleTarget(){
-  const q = document.getElementById('roleSearchForTarget').value.trim().toLowerCase();
+async function filterRoleTarget(){
+  const q = document.getElementById('roleSearchForTarget').value.trim();
   const box = document.getElementById('roleTargetResults');
   box.style.display='';
   box.innerHTML='';
-  const filtered = roles.filter(r => (r.role_name||'').toLowerCase().includes(q));
-  filtered.slice(0,200).forEach(r=>{
+  box.innerHTML = "<div class=\"small muted\" style=\"padding:10px\">로딩중...</div>";
+  const filtered = await roleSearch(q||'');
+  box.innerHTML='';
+  (filtered||[]).slice(0,80).forEach(r=>{
     const div = document.createElement('div');
     div.className='item';
     div.textContent = `${r.role_name} (${r.role_id})`;
@@ -575,19 +606,19 @@ function fillTargetFields(form){
 let rbSelected = [];
 
 function rbOpen(){
-  ensureRolesLoaded().then(()=>{ rbRender(''); });
   document.getElementById('rbList').style.display = '';
+  rbRender('');
 }
 function rbFilter(){
   const q = document.getElementById('rbRoleSearch').value || '';
   rbRender(q);
 }
-function rbRender(q){
-  if (!rolesLoaded) return;
+async function rbRender(q){
+  
   const list = document.getElementById('rbList');
-  const query = (q||'').toLowerCase();
-  const filtered = roles.filter(r => (r.role_name||'').toLowerCase().includes(query)).slice(0, 40);
-  list.innerHTML = filtered.map(r=>{
+  list.innerHTML = "<div class=\"small muted\" style=\"padding:10px\">로딩중...</div>";
+  const filtered = await roleSearch(q||'');
+  list.innerHTML = (filtered||[]).slice(0,40).map(r=>{
     const rid = String(r.role_id);
     const picked = rbSelected.includes(rid);
     return `<div class="item" onclick="rbToggle('${rid}', '${escapeHtml(r.role_name||'')}')">
@@ -606,8 +637,7 @@ function rbUpdate(){
   document.getElementById('rbRoleIds').value = rbSelected.join(',');
   const chips = document.getElementById('rbChips');
   chips.innerHTML = rbSelected.map(rid=>{
-    const r = roles.find(x=>String(x.role_id)===String(rid));
-    const nm = r ? (r.role_name||rid) : rid;
+    const nm = roleNameById[String(rid)] || rid;
     return `<span class="chip">${escapeHtml(nm)} <b onclick="event.stopPropagation(); rbToggle('${rid}','')">×</b></span>`;
   }).join('');
 }
@@ -621,6 +651,84 @@ function rbValidate(){
   return true;
 }
 
-</script>
+
+
+// ---- Reaction role UI ----
+let rrMode = 'add';
+let rrSelectedAdd = [];
+let rrSelectedRemove = [];
+
+// 초기 렌더
+setTimeout(()=>{ try{ rrUpdate(); }catch(e){} }, 0);
+
+function rrSetMode(mode){
+  rrMode = mode;
+  document.getElementById('rrList').style.display='';
+  rrRender('');
+}
+
+function rrFilter(){
+  const q = (rrMode==='add') ? document.getElementById('rrAddRoleSearch').value : document.getElementById('rrRemoveRoleSearch').value;
+  rrRender(q||'');
+}
+
+async function rrRender(q){
+  const list = document.getElementById('rrList');
+  list.innerHTML='<div class="small muted" style="padding:10px">로딩중...</div>';
+  const filtered = await roleSearch(q||'');
+  list.innerHTML = (filtered||[]).slice(0,60).map(r=>{
+    const rid = String(r.role_id);
+    const picked = (rrMode==='add' ? rrSelectedAdd.includes(rid) : rrSelectedRemove.includes(rid));
+    return `<div class="item" onclick="rrToggle('${rid}')">${escapeHtml(r.role_name||'-')} <span class="muted mono">(${rid})${picked?' ✅':''}</span></div>`;
+  }).join('') || `<div class="item">검색 결과 없음</div>`;
+}
+
+function rrToggle(rid){
+  const arr = (rrMode==='add') ? rrSelectedAdd : rrSelectedRemove;
+  const i = arr.indexOf(rid);
+  if (i>=0) arr.splice(i,1); else arr.push(rid);
+  rrUpdate();
+}
+
+function rrUpdate(){
+  const addBox = document.getElementById('rrAddChips');
+  const remBox = document.getElementById('rrRemoveChips');
+  if (addBox) addBox.innerHTML = rrSelectedAdd.map(rid=>`<span class="chip"><b>+</b> ${escapeHtml(roleNameById[rid]||rid)} <span class="x" onclick="event.stopPropagation(); rrChipRemove('${rid}','add')">×</span></span>`).join('');
+  if (remBox) remBox.innerHTML = rrSelectedRemove.map(rid=>`<span class="chip"><b>-</b> ${escapeHtml(roleNameById[rid]||rid)} <span class="x" onclick="event.stopPropagation(); rrChipRemove('${rid}','remove')">×</span></span>`).join('');
+  const addIds = document.getElementById('rrAddRoleIds');
+  const remIds = document.getElementById('rrRemoveRoleIds');
+  if (addIds) addIds.value = rrSelectedAdd.join(',');
+  if (remIds) remIds.value = rrSelectedRemove.join(',');
+}
+
+function rrChipRemove(rid, mode){
+  if (mode==='add') rrSelectedAdd = rrSelectedAdd.filter(x=>x!==rid);
+  else rrSelectedRemove = rrSelectedRemove.filter(x=>x!==rid);
+  rrUpdate();
+}
+
+function rrClear(){
+  rrSelectedAdd=[]; rrSelectedRemove=[];
+  const a = document.getElementById('rrAddRoleSearch');
+  const r = document.getElementById('rrRemoveRoleSearch');
+  if (a) a.value='';
+  if (r) r.value='';
+  const l = document.getElementById('rrList');
+  if (l) l.style.display='none';
+  rrUpdate();
+}
+
+function rrValidate(){
+  const ch = document.getElementById('rrChannel')?.value;
+  const msg = document.getElementById('rrMessage')?.value || '';
+  const hasMsg = (msg.match(/\d{10,25}/g)||[]).length>0;
+  const emoji = (document.getElementById('rrEmoji')?.value||'').trim();
+  if (!ch){ alert('채널을 선택하세요.'); return false; }
+  if (!hasMsg){ alert('메시지 링크/ID를 입력하세요.'); return false; }
+  if (!emoji){ alert('이모지를 입력하세요.'); return false; }
+  if (rrSelectedAdd.length===0 && rrSelectedRemove.length===0){ alert('추가/제거 역할 중 하나는 필요해요.'); return false; }
+  return true;
+}
+/script>
 </body>
 </html>

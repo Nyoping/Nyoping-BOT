@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import discord
 from discord.ext import commands
@@ -26,6 +27,7 @@ EXTENSIONS = [
     "nyopingbot.cogs.level_roles",
     "nyopingbot.cogs.moderation",
     "nyopingbot.cogs.reaction_lock",
+    "nyopingbot.cogs.reaction_roles",
 ]
 
 def _role_ids(member: discord.Member) -> list[int]:
@@ -276,12 +278,18 @@ class NyopingBot(commands.Bot):
         except Exception:
             pass
 
-    async def _role_sync_worker(self) -> None:
+    
+async def _role_sync_worker(self) -> None:
         """Process role_sync_queue written by the dashboard (bulk level edits).
-        Runs slowly to avoid Discord rate limits and to avoid blocking slash commands.
+        Runs in small batches to avoid Discord rate limits.
         """
         await self.wait_until_ready()
         await asyncio.sleep(3)
+
+        # Speed knobs (env)
+        batch_limit = int(os.getenv('ROLE_SYNC_BATCH', '10') or 10)
+        per_user_sleep = float(os.getenv('ROLE_SYNC_PER_USER_SLEEP', '0.35') or 0.35)
+        loop_sleep = float(os.getenv('ROLE_SYNC_LOOP_SLEEP', '4') or 4)
 
         while not self.is_closed():
             try:
@@ -294,7 +302,7 @@ class NyopingBot(commands.Bot):
                     guilds = list(self.guilds)
 
                 for g in guilds:
-                    batch = await fetch_role_sync_batch(self.db_pool, g.id, limit=3)
+                    batch = await fetch_role_sync_batch(self.db_pool, g.id, limit=batch_limit)
                     if not batch:
                         continue
                     rules = await list_level_role_sets(self.db_pool, g.id)
@@ -309,11 +317,11 @@ class NyopingBot(commands.Bot):
                         expected, managed = compute_expected_and_managed_roles(rules, level)
                         if managed:
                             await sync_member_roles(member, expected, managed, reason="대시보드 변경 반영")
-                        await asyncio.sleep(1.0)  # gentler (avoid global rate limits)
+                        await asyncio.sleep(per_user_sleep)  # configurable
             except Exception:
                 logging.exception("role sync worker error")
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(loop_sleep)
 
 def main() -> None:
     cfg = load_env_config()

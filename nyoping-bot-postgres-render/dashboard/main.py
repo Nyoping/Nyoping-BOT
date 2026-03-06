@@ -92,6 +92,7 @@ MIGRATIONS_SQL = [
     # member cache extensions
     "ALTER TABLE guild_members_cache ADD COLUMN IF NOT EXISTS in_guild BOOLEAN NOT NULL DEFAULT TRUE;",
     "ALTER TABLE guild_members_cache ADD COLUMN IF NOT EXISTS role_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[];",
+    "CREATE INDEX IF NOT EXISTS idx_guild_members_cache_role_ids ON guild_members_cache USING GIN (role_ids);",
 # channels cache (for reaction lock UI)
 """CREATE TABLE IF NOT EXISTS guild_channels_cache (
     guild_id BIGINT NOT NULL,
@@ -112,6 +113,18 @@ MIGRATIONS_SQL = [
 );""",
 "CREATE INDEX IF NOT EXISTS idx_reaction_blocks_guild ON reaction_blocks (guild_id);",
 "CREATE INDEX IF NOT EXISTS idx_reaction_blocks_message ON reaction_blocks (guild_id, message_id);",
+    """CREATE TABLE IF NOT EXISTS reaction_role_rules (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    emoji_key TEXT NOT NULL,
+    add_role_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[],
+    remove_role_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[],
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (guild_id, message_id, emoji_key)
+);""",
+    "CREATE INDEX IF NOT EXISTS idx_reaction_role_rules_guild ON reaction_role_rules (guild_id);",
+    "CREATE INDEX IF NOT EXISTS idx_reaction_role_rules_message ON reaction_role_rules (guild_id, message_id);",
     # v2 rules
     """CREATE TABLE IF NOT EXISTS level_role_sets (
         guild_id BIGINT NOT NULL,
@@ -139,7 +152,22 @@ MIGRATIONS_SQL = [
 def _env(name: str, default: str = "") -> str:
     return str(os.getenv(name, default) or default)
 
+
+
+def _parse_emoji_key(text: str) -> str:
+    """Return canonical emoji key.
+    - Custom: <a:name:id> or <:name:id> -> name:id
+    - Unicode: 그대로
+    """
+    t = (text or "").strip()
+    m = re.search(r"<a?:([\w\-]+):(\d{10,25})>", t)
+    if m:
+        return f"{m.group(1)}:{m.group(2)}"
+    return t
+
+
 def _parse_ids(text: str) -> list[int]:
+
     if not text:
         return []
     ids = re.findall(r"(\d{10,25})", text)
@@ -223,21 +251,26 @@ async def admin_login(request: Request, password: str = Form(...)):
     request.session["admin_ok"] = True
     return RedirectResponse(url="/admin", status_code=302)
 
+
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request, guild_id: str | None = None, msg: str | None = None):
+async def admin_page(request: Request, guild_id: str | None = None, msg: str | None = None, rank_page: int = 1):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
 
     pool = await _ensure_pool(app)
 
     gid = int(guild_id) if guild_id and str(guild_id).isdigit() else None
-    settings = None
+    settings: dict[str, Any] | None = None
     roles = []
     channels = []
     reaction_blocks = []
+    reaction_role_rules = []
     rules = []
-    top_rows = []
-    total_members = 0
+
+    # ranking
+    rank_rows = []
+    rank_total = 0
+    rank_page_size = 50
 
     if gid:
         settings = await _get_settings(pool, gid)
@@ -245,7 +278,6 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "SELECT role_id, role_name, position FROM guild_roles_cache WHERE guild_id=$1 ORDER BY position DESC, role_name ASC",
             gid,
         )
-
         channels = await pool.fetch(
             "SELECT channel_id, channel_name, channel_type FROM guild_channels_cache WHERE guild_id=$1 ORDER BY channel_type, channel_name",
             gid,
@@ -254,13 +286,22 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "SELECT channel_id, message_id, blocked_role_id FROM reaction_blocks WHERE guild_id=$1 ORDER BY message_id, blocked_role_id",
             gid,
         )
-
+        reaction_role_rules = await pool.fetch(
+            "SELECT channel_id, message_id, emoji_key, add_role_ids, remove_role_ids FROM reaction_role_rules WHERE guild_id=$1 ORDER BY message_id, emoji_key",
+            gid,
+        )
         rules = await pool.fetch(
             "SELECT level, add_role_ids, remove_role_ids FROM level_role_sets WHERE guild_id=$1 ORDER BY level",
             gid,
         )
-        # top 10 (include 0 XP members too)
-        top_rows = await pool.fetch(
+
+        rp = max(1, int(rank_page or 1))
+        off = (rp - 1) * rank_page_size
+        rank_total = int(await pool.fetchval(
+            "SELECT COUNT(*) FROM guild_members_cache WHERE guild_id=$1 AND in_guild=TRUE",
+            gid,
+        ) or 0)
+        rank_rows = await pool.fetch(
             """SELECT m.user_id,
                       COALESCE(s.xp,0) AS xp,
                       m.display_name, m.nick, m.global_name, m.username, m.discriminator
@@ -268,14 +309,31 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
                LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
                WHERE m.guild_id=$1 AND m.in_guild=TRUE
                ORDER BY COALESCE(s.xp,0) DESC, m.user_id
-               LIMIT 10""",
-            gid,
+               LIMIT $2 OFFSET $3""",
+            gid, rank_page_size, off,
         )
-        total_members = int(await pool.fetchval("SELECT COUNT(*) FROM guild_members_cache WHERE guild_id=$1 AND in_guild=TRUE", gid) or 0)
 
-    # role name map for rule rendering
     role_name_map = {int(r["role_id"]): str(r["role_name"]) for r in roles}
     channel_name_map = {int(c["channel_id"]): str(c["channel_name"]) for c in channels}
+
+    # date suggestions (last 90 days)
+    recent_dates = []
+    try:
+        today = datetime.now(tz=KST).date()
+        for i in range(0, 90):
+            recent_dates.append((today - timedelta(days=i)).strftime("%Y-%m-%d"))
+    except Exception:
+        recent_dates = []
+
+    pending_role_sync = 0
+    if gid:
+        try:
+            pending_role_sync = int(await pool.fetchval(
+                "SELECT COUNT(*) FROM role_sync_queue WHERE guild_id=$1 AND processed_at IS NULL",
+                gid,
+            ) or 0)
+        except Exception:
+            pending_role_sync = 0
 
     return TEMPLATES.TemplateResponse(
         "admin.html",
@@ -286,11 +344,16 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "roles": roles,
             "channels": channels,
             "reaction_blocks": reaction_blocks,
+            "reaction_role_rules": reaction_role_rules,
             "rules": rules,
             "role_name_map": role_name_map,
             "channel_name_map": channel_name_map,
-            "top_rows": top_rows,
-            "total_members": total_members,
+            "rank_rows": rank_rows,
+            "rank_total": rank_total,
+            "rank_page": max(1, int(rank_page or 1)),
+            "rank_page_size": rank_page_size,
+            "pending_role_sync": pending_role_sync,
+            "recent_dates": recent_dates,
             "msg": msg,
         },
     )
@@ -477,26 +540,104 @@ async def reaction_block_delete(
     )
     return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응차단+삭제+완료", status_code=302)
 
+
+
+@app.post("/admin/reaction-role-upsert")
+async def reaction_role_upsert(
+    request: Request,
+    guild_id: int = Form(...),
+    channel_id: str = Form(...),
+    message: str = Form(...),
+    emoji: str = Form(...),
+    add_role_ids: str = Form(""),
+    remove_role_ids: str = Form(""),
+):
+    if not _require_admin(request):
+        return RedirectResponse(url="/", status_code=302)
+    pool = await _ensure_pool(app)
+    mids = _parse_ids(message)
+    if not mids:
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=메시지+ID(또는+링크)를+입력하세요", status_code=302)
+    msg_id = int(mids[0])
+    if not str(channel_id).isdigit():
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=채널을+선택하세요", status_code=302)
+    cid = int(channel_id)
+    ek = _parse_emoji_key(emoji)
+    if not ek:
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=이모지를+입력하세요", status_code=302)
+
+    add_ids = _parse_ids(add_role_ids)
+    rem_ids = _parse_ids(remove_role_ids)
+    if not add_ids and not rem_ids:
+        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=추가/제거+역할+중+하나는+필수", status_code=302)
+
+    await pool.execute(
+        """INSERT INTO reaction_role_rules (guild_id, channel_id, message_id, emoji_key, add_role_ids, remove_role_ids, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,NOW())
+           ON CONFLICT (guild_id, message_id, emoji_key)
+           DO UPDATE SET channel_id=EXCLUDED.channel_id, add_role_ids=EXCLUDED.add_role_ids, remove_role_ids=EXCLUDED.remove_role_ids, updated_at=NOW()""",
+        int(guild_id), int(cid), int(msg_id), str(ek), add_ids, rem_ids
+    )
+
+    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응역할+저장+완료", status_code=302)
+
+
+@app.post("/admin/reaction-role-delete")
+async def reaction_role_delete(
+    request: Request,
+    guild_id: int = Form(...),
+    message_id: int = Form(...),
+    emoji_key: str = Form(...),
+):
+    if not _require_admin(request):
+        return RedirectResponse(url="/", status_code=302)
+    pool = await _ensure_pool(app)
+    await pool.execute(
+        "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
+        int(guild_id), int(message_id), str(emoji_key)
+    )
+    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응역할+삭제+완료", status_code=302)
+
 # ---- APIs for UI (DB cache only, no Discord REST) ----
-@app.get("/admin/api/roles_cache")
-async def api_roles_cache(request: Request, guild_id: int):
+@app.get("/admin/api/roles_search")
+async def api_roles_search(request: Request, guild_id: int, q: str = ""):
     if not _require_admin(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     pool = await _ensure_pool(app)
-    rows = await pool.fetch(
-        "SELECT role_id, role_name, position FROM guild_roles_cache WHERE guild_id=$1 ORDER BY position DESC, role_name ASC",
-        int(guild_id)
-    )
+    qq = (q or "").strip()
+    if qq:
+        rows = await pool.fetch(
+            "SELECT role_id, role_name, position FROM guild_roles_cache WHERE guild_id=$1 AND role_name ILIKE $2 ORDER BY position DESC, role_name ASC LIMIT 80",
+            int(guild_id), f"%{qq}%",
+        )
+    else:
+        rows = await pool.fetch(
+            "SELECT role_id, role_name, position FROM guild_roles_cache WHERE guild_id=$1 ORDER BY position DESC, role_name ASC LIMIT 60",
+            int(guild_id)
+        )
     return {"ok": True, "roles": [dict(r) for r in rows]}
 
+
 @app.get("/admin/api/members_search")
-async def api_members_search(request: Request, guild_id: int, q: str):
+async def api_members_search(request: Request, guild_id: int, q: str = ""):
     if not _require_admin(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    q = (q or "").strip()
-    if len(q) < 1:
-        return {"ok": True, "members": []}
+
     pool = await _ensure_pool(app)
+    q = (q or "").strip()
+
+    # If empty query: return recent members for quick picker
+    if len(q) < 1:
+        rows = await pool.fetch(
+            """SELECT user_id, username, discriminator, global_name, nick, display_name
+               FROM guild_members_cache
+               WHERE guild_id=$1 AND in_guild=TRUE
+               ORDER BY updated_at DESC
+               LIMIT 60""",
+            int(guild_id)
+        )
+        return {"ok": True, "members": [dict(r) for r in rows]}
+
     q_like = f"%{q}%"
     rows = await pool.fetch(
         """SELECT user_id, username, discriminator, global_name, nick, display_name

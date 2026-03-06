@@ -86,6 +86,7 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
         # guild_members_cache: track current membership + role ids for role-based selection
         await conn.execute("ALTER TABLE guild_members_cache ADD COLUMN IF NOT EXISTS in_guild BOOLEAN NOT NULL DEFAULT TRUE;")
         await conn.execute("ALTER TABLE guild_members_cache ADD COLUMN IF NOT EXISTS role_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[];")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_guild_members_cache_role_ids ON guild_members_cache USING GIN (role_ids);")
 
         # level role rules v2 (multiple add/remove roles)
         await conn.execute("""CREATE TABLE IF NOT EXISTS level_role_sets (
@@ -118,7 +119,22 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
         # legacy compatibility
         await conn.execute("ALTER TABLE reaction_blocks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();")
 
-        # channels cache (for dashboard dropdown)
+        
+        # reaction role rules (reaction -> add/remove roles)
+        await conn.execute("""CREATE TABLE IF NOT EXISTS reaction_role_rules (
+          guild_id BIGINT NOT NULL,
+          channel_id BIGINT NOT NULL,
+          message_id BIGINT NOT NULL,
+          emoji_key TEXT NOT NULL,
+          add_role_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[],
+          remove_role_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[],
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (guild_id, message_id, emoji_key)
+        );""")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_reaction_role_rules_guild ON reaction_role_rules (guild_id);")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_reaction_role_rules_message ON reaction_role_rules (guild_id, message_id);")
+
+# channels cache (for dashboard dropdown)
         await conn.execute("""CREATE TABLE IF NOT EXISTS guild_channels_cache (
           guild_id BIGINT NOT NULL,
           channel_id BIGINT NOT NULL,
@@ -548,5 +564,37 @@ async def list_reaction_blocks(pool: asyncpg.Pool, guild_id: int) -> list[dict[s
         rows = await conn.fetch(
             "SELECT guild_id, channel_id, message_id, blocked_role_id FROM reaction_blocks WHERE guild_id=$1 ORDER BY message_id, blocked_role_id",
             guild_id
+        )
+    return [dict(r) for r in rows]
+
+
+# ---- Reaction role rules ----
+
+async def upsert_reaction_role_rule(pool: asyncpg.Pool, guild_id: int, channel_id: int, message_id: int, emoji_key: str, add_ids: list[int], remove_ids: list[int]) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO reaction_role_rules (guild_id, channel_id, message_id, emoji_key, add_role_ids, remove_role_ids, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,NOW())
+               ON CONFLICT (guild_id, message_id, emoji_key)
+               DO UPDATE SET channel_id=EXCLUDED.channel_id, add_role_ids=EXCLUDED.add_role_ids, remove_role_ids=EXCLUDED.remove_role_ids, updated_at=NOW()""",
+            int(guild_id), int(channel_id), int(message_id), str(emoji_key), list(map(int, add_ids)), list(map(int, remove_ids))
+        )
+
+async def delete_reaction_role_rule(pool: asyncpg.Pool, guild_id: int, message_id: int, emoji_key: str) -> int:
+    async with pool.acquire() as conn:
+        r = await conn.execute(
+            "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
+            int(guild_id), int(message_id), str(emoji_key)
+        )
+    try:
+        return int(str(r).split()[-1])
+    except Exception:
+        return 0
+
+async def list_reaction_role_rules(pool: asyncpg.Pool, guild_id: int) -> list[dict[str, Any]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT guild_id, channel_id, message_id, emoji_key, add_role_ids, remove_role_ids FROM reaction_role_rules WHERE guild_id=$1 ORDER BY message_id, emoji_key",
+            int(guild_id)
         )
     return [dict(r) for r in rows]
