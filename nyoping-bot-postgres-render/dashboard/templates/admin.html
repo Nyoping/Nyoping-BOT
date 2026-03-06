@@ -369,7 +369,7 @@ let roles = [];
 let roleNameById = {};
 
 async function roleSearch(q){
-  const gid = "{{ guild_id or  }}";
+  const gid = "{{ guild_id or '' }}";
   if (!gid) return [];
   const res = await fetch(`/admin/api/roles_search?guild_id=${gid}&q=${encodeURIComponent(q||"" )}`);
   const data = await res.json();
@@ -496,7 +496,7 @@ let userResultsBox = document.getElementById('userResults');
 let userTimer = null;
 
 async function openUserPicker(){
-  const gid = "{{ guild_id or  }}";
+  const gid = "{{ guild_id or '' }}";
   if (!gid) return;
   const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=`);
   const data = await res.json();
