@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>뇨핑봇 관리자</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;margin:0;background:#0b1220;color:#e5e7eb}
+    .wrap{max-width:1100px;margin:0 auto;padding:22px}
+    .card{background:#111a2e;border:1px solid #1f2a44;border-radius:14px;padding:16px;margin-top:14px}
+    h1,h2{margin:0 0 10px}
+    a{color:#93c5fd}
+    label{display:block;font-size:13px;color:#a5b4fc;margin-top:10px}
+    input,select,button{font-size:14px}
+    input,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb}
+    button{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:white;cursor:pointer}
+    .row{display:flex;gap:12px;align-items:center}
+    .col{flex:1}
+    .small{font-size:13px;color:#9ca3af}
+    .msg{padding:10px;border-radius:10px;background:#0b1220;border:1px dashed #2b3a60;margin:10px 0}
+    .list{border:1px solid #2b3a60;border-radius:10px;max-height:260px;overflow:auto;background:#0b1220}
+    .item{padding:10px;border-bottom:1px solid #1f2a44;cursor:pointer}
+    .item:hover{background:#0f1730}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .chip{background:#0b1220;border:1px solid #2b3a60;border-radius:999px;padding:6px 10px;font-size:12px}
+    .chip b{color:#93c5fd}
+    .chip .x{margin-left:8px;color:#fca5a5;cursor:pointer}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #1f2a44;padding:8px;text-align:left;font-size:13px}
+    th{color:#a5b4fc}
+    .pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#0b1220;border:1px solid #2b3a60}
+    .muted{color:#94a3b8}
+    .danger{background:#ef4444}
+    .secondary{background:#334155}
+    .btnrow{display:flex;gap:8px;flex-wrap:wrap}
+    .btn{padding:8px 12px;border-radius:10px;border:0;cursor:pointer}
+    .btn.secondary{background:#334155}
+    .btn.danger{background:#ef4444}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧊 뇨핑봇 관리자</h1>
+
+  {% if msg %}
+    <div class="msg">✅ {{ msg }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>서버 선택</h2>
+    <form method="get" action="/admin" class="row">
+      <div class="col">
+        <input name="guild_id" placeholder="서버 ID (예: 1478...)" value="{{ guild_id or '' }}" required>
+        <div class="small">디스코드에서 개발자 모드 ON → 서버 우클릭 → ID 복사</div>
+      </div>
+      <div>
+        <button type="submit">열기</button>
+      </div>
+    </form>
+  </div>
+
+  {% if guild_id %}
+  <div class="card">
+    <h2>서버 설정</h2>
+    <form method="post" action="/admin/save-settings">
+      <input type="hidden" name="guild_id" value="{{ guild_id }}">
+      <div class="row">
+        <div class="col">
+          <label>출석 XP</label>
+          <input type="number" name="checkin_xp" value="{{ settings.checkin_xp }}" min="0" max="10000">
+        </div>
+        <div class="col">
+          <label>출석 제한 (하루 1회)</label>
+          <select name="checkin_limit_enabled">
+            <option value="on" {% if settings.checkin_limit_enabled %}selected{% endif %}>ON</option>
+            <option value="off" {% if not settings.checkin_limit_enabled %}selected{% endif %}>OFF(테스트)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>연속 출석 보너스 / 일</label>
+          <input type="number" name="checkin_streak_bonus_per_day" value="{{ settings.checkin_streak_bonus_per_day }}" min="0" max="10000">
+          <div class="small">예: 10이면 2일째 +10, 3일째 +20 ...</div>
+        </div>
+        <div class="col">
+          <label>연속 출석 보너스 상한 (0=무제한)</label>
+          <input type="number" name="checkin_streak_bonus_cap" value="{{ settings.checkin_streak_bonus_cap }}" min="0" max="100000">
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>채팅 XP</label>
+          <input type="number" name="message_xp" value="{{ settings.message_xp }}" min="0" max="1000">
+        </div>
+        <div class="col">
+          <label>채팅 XP 쿨다운(초)</label>
+          <input type="number" name="message_cooldown_sec" value="{{ settings.message_cooldown_sec }}" min="0" max="3600">
+        </div>
+        <div class="col">
+          <label>음성 XP(분당)</label>
+          <input type="number" name="voice_xp_per_min" value="{{ settings.voice_xp_per_min }}" min="0" max="1000">
+        </div>
+      </div>
+
+      <div class="btnrow" style="margin-top:12px">
+        <button class="btn" type="submit">저장</button>
+      </div>
+      <div class="small mt">⚠️ 봇이 켜져 있어야 역할/유저 캐시가 최신으로 유지돼요.</div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>빠른 작업</h2>
+    <div class="small">유저 1명 선택 또는 “역할”을 선택해서 해당 역할의 모든 유저에게 적용할 수 있어요.</div>
+
+    <div class="row" style="margin-top:10px">
+      <div class="col">
+        <label>대상 선택 방식</label>
+        <select id="targetType" onchange="onTargetTypeChange()">
+          <option value="user">유저</option>
+          <option value="role">역할</option>
+        </select>
+      </div>
+      <div class="col">
+        <label>선택된 유저/역할</label>
+        <input id="selectedTargetLabel" disabled value="(미선택)">
+      </div>
+    </div>
+
+    <div id="userPicker" style="margin-top:10px">
+      <label>유저 검색 (닉네임/ID)</label>
+      <div class="row">
+        <input id="userSearch" placeholder="예: nyoping 또는 123..." oninput="searchUsers()" autocomplete="off">
+        <button type="button" class="btn secondary" onclick="loadAllMembers()">+검색</button>
+      </div>
+      <div class="small">+검색을 누르면 서버 유저 목록 미리보기가 떠요 (캐시 기준).</div>
+      <div id="userResults" class="list" style="margin-top:8px; display:none"></div>
+    </div>
+
+    <div id="rolePicker" style="margin-top:10px; display:none">
+      <label>역할 선택</label>
+      <input id="roleSearchForTarget" placeholder="역할 이름 검색" onfocus="ensureRolesLoaded()" oninput="filterRoleTarget()" autocomplete="off">
+      <div id="roleTargetResults" class="list" style="margin-top:8px; display:none"></div>
+      <div class="small">선택한 역할의 모든 유저에게 출석 초기화/레벨 조정이 적용돼요.</div>
+    </div>
+
+    <hr style="border:0;border-top:1px solid #1f2a44;margin:14px 0">
+
+    <div class="row">
+      <div class="col card" style="margin-top:0">
+        <h3 style="margin:0 0 8px">출석 초기화</h3>
+        <form method="post" action="/admin/quick-reset-checkin" onsubmit="return fillTargetFields(this)">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}">
+          <input type="hidden" name="target_type">
+          <input type="hidden" name="user_id">
+          <input type="hidden" name="role_id">
+          <label>날짜(YYYY-MM-DD, 비우면 오늘)</label>
+          <input name="ymd" placeholder="예: 2026-03-06">
+          <div class="btnrow" style="margin-top:10px">
+            <button class="btn danger" type="submit">출석 초기화 적용</button>
+          </div>
+          <div class="small">서버장만 쓰도록 하고 싶다면 비밀번호를 서버장만 공유해줘.</div>
+        </form>
+      </div>
+
+      <div class="col card" style="margin-top:0">
+        <h3 style="margin:0 0 8px">레벨 조정</h3>
+        <form method="post" action="/admin/quick-set-level" onsubmit="return fillTargetFields(this)">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}">
+          <input type="hidden" name="target_type">
+          <input type="hidden" name="user_id">
+          <input type="hidden" name="role_id">
+          <label>레벨</label>
+          <input type="number" name="level" value="0" min="0" max="100000">
+          <div class="btnrow" style="margin-top:10px">
+            <button class="btn" type="submit">레벨 적용</button>
+          </div>
+          <div class="small">적용 후 역할 동기화는 봇이 천천히 처리해요(레이트리밋 방지).</div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="card">
+    <h2>레벨 역할 규칙</h2>
+    <div class="small">규칙은 누적 적용됩니다. 예: Lv.10에 A추가, Lv.20에 B추가/A제거 → Lv.15는 A, Lv.25는 B</div>
+
+    <form method="post" action="/admin/rules-upsert" onsubmit="return validateRuleForm()">
+      <input type="hidden" name="guild_id" value="{{ guild_id }}">
+      <div class="row">
+        <div class="col">
+          <label>레벨(임계값)</label>
+          <input type="number" name="level" id="ruleLevel" value="10" min="0" max="100000">
+        </div>
+        <div class="col">
+          <label>추가할 역할 (여러 개 선택 가능)</label>
+          <input id="addRoleSearch" placeholder="여기 클릭 후 역할 검색/선택" onfocus="setRolePickMode('add')" oninput="filterRoleList()" autocomplete="off">
+          <div id="addChips" class="chips"></div>
+          <input type="hidden" name="add_role_ids" id="addRoleIds">
+        </div>
+        <div class="col">
+          <label>제거할 역할 (여러 개 선택 가능)</label>
+          <input id="removeRoleSearch" placeholder="여기 클릭 후 역할 검색/선택" onfocus="setRolePickMode('remove')" oninput="filterRoleList()" autocomplete="off">
+          <div id="removeChips" class="chips"></div>
+          <input type="hidden" name="remove_role_ids" id="removeRoleIds">
+        </div>
+      </div>
+
+      <div id="rolePickList" class="list" style="margin-top:10px; display:none"></div>
+
+      <div class="btnrow" style="margin-top:10px">
+        <button class="btn" type="submit">규칙 저장</button>
+        <button class="btn secondary" type="button" onclick="clearRuleSelection()">선택 비우기</button>
+      </div>
+      <div class="small">추가/제거 둘 다 비어있으면 저장되지 않아요. 한쪽만 비어도 OK!</div>
+    </form>
+
+    <h3 style="margin-top:18px">현재 규칙</h3>
+    <table>
+      <thead>
+        <tr><th>레벨</th><th>추가</th><th>제거</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for r in rules %}
+        <tr>
+          <td><span class="pill">Lv.{{ r.level }}</span></td>
+          <td class="muted">
+            {% for rid in r.add_role_ids %}
+              <span class="pill">{{ role_name_map.get(rid, rid) }}</span>
+            {% endfor %}
+          </td>
+          <td class="muted">
+            {% for rid in r.remove_role_ids %}
+              <span class="pill">{{ role_name_map.get(rid, rid) }}</span>
+            {% endfor %}
+          </td>
+          <td>
+            <form method="post" action="/admin/rules-delete" style="margin:0">
+              <input type="hidden" name="guild_id" value="{{ guild_id }}">
+              <input type="hidden" name="level" value="{{ r.level }}">
+              <button class="btn danger" type="submit">삭제</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+<div class="card">
+  <h2>반응(이모지) 차단</h2>
+  <div class="small">
+    특정 역할이 특정 메시지에 <b>이미 달려있는 반응</b>을 누르면 자동으로 제거해서 사실상 못 누르게 만들어요.
+    (보통 0.5~1초 정도 걸릴 수 있어요. 네트워크/디스코드 처리 지연 때문) <br>
+    ⚠️ 봇 역할에 채널 권한 <b>메시지 관리(Manage Messages)</b>가 있어야 합니다.
+  </div>
+
+  <form method="post" action="/admin/reaction-block-add" onsubmit="return rbValidate()">
+    <input type="hidden" name="guild_id" value="{{ guild_id }}">
+
+    <div class="row">
+      <div class="col">
+        <label>채널</label>
+        {% if channels and channels|length > 0 %}
+          <select name="channel_id" id="rbChannel">
+            <option value="">채널 선택</option>
+            {% for c in channels %}
+              <option value="{{ c.channel_id }}">{{ c.channel_name }} ({{ c.channel_id }})</option>
+            {% endfor %}
+          </select>
+{% else %}
+          <input name="channel_id" id="rbChannel" placeholder="채널 ID (예: 123...)" >
+          <div class="small muted">채널 목록 캐시가 아직 없어요. 봇이 켜진 후 1~2분 기다리거나, 채널 ID를 직접 입력하세요.</div>
+{% endif %}
+      </div>
+      <div class="col">
+        <label>메시지 링크/ID</label>
+        <input name="message" id="rbMessage" placeholder="메시지 링크 또는 숫자 ID">
+        <div class="small">개발자모드 ON → 메시지 링크/ID 복사해서 붙여넣으면 돼요.</div>
+      </div>
+    </div>
+
+    <label>차단할 역할 (여러 개 선택 가능)</label>
+    <input id="rbRoleSearch" placeholder="여기 클릭 후 역할 검색/선택" onfocus="rbOpen()" oninput="rbFilter()" autocomplete="off">
+    <div id="rbChips" class="chips"></div>
+    <input type="hidden" name="blocked_role_ids" id="rbRoleIds">
+    <div id="rbList" class="list" style="margin-top:8px; display:none"></div>
+
+    <div style="margin-top:10px">
+      <button class="btn" type="submit">저장</button>
+    </div>
+  </form>
+
+  <h3 style="margin:14px 0 8px">현재 규칙</h3>
+  <table>
+    <thead><tr><th>채널</th><th>메시지ID</th><th>차단 역할</th><th></th></tr></thead>
+    <tbody>
+    {% for b in reaction_blocks %}
+      <tr>
+        <td>{{ channel_name_map.get(b.channel_id, b.channel_id) }}</td>
+        <td class="mono">{{ b.message_id }}</td>
+        <td>{{ role_name_map.get(b.blocked_role_id, b.blocked_role_id) }}</td>
+        <td>
+          <form method="post" action="/admin/reaction-block-delete">
+            <input type="hidden" name="guild_id" value="{{ guild_id }}">
+            <input type="hidden" name="message_id" value="{{ b.message_id }}">
+            <input type="hidden" name="role_id" value="{{ b.blocked_role_id }}">
+            <button class="btn danger" type="submit">삭제</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+  <div class="card">
+    <h2>TOP 10 XP</h2>
+    <div class="small">서버 내 유저만 표시(나간 사람 제외). 닉네임은 캐시 기준이라 처음엔 비어있을 수 있어요.</div>
+    <table>
+      <thead><tr><th>#</th><th>유저ID</th><th>닉네임</th><th>Discord</th><th>XP</th></tr></thead>
+      <tbody>
+      {% for r in top_rows %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ r.user_id }}</td>
+          <td class="muted">{{ r.display_name or r.nick or r.global_name or "-" }}</td>
+          <td class="muted">{{ (r.username or "-") ~ ("#" ~ r.discriminator if r.discriminator and r.discriminator != "0" else "") }}</td>
+          <td>{{ r.xp }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="small" style="margin-top:10px">총 멤버(캐시 기준): {{ total_members }}명</div>
+  </div>
+
+  {% endif %}
+
+</div>
+
+<script>
+function escapeHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+let rolesLoaded = false;
+let roles = [];
+let rolePickMode = 'add';
+let selectedAdd = [];
+let selectedRemove = [];
+
+let selectedTargetType = 'user';
+let selectedUserId = '';
+let selectedRoleId = '';
+let selectedLabel = '(미선택)';
+
+function setTargetLabel(text){
+  document.getElementById('selectedTargetLabel').value = text;
+}
+
+function onTargetTypeChange(){
+  const v = document.getElementById('targetType').value;
+  selectedTargetType = v;
+  document.getElementById('userPicker').style.display = (v==='user') ? '' : 'none';
+  document.getElementById('rolePicker').style.display = (v==='role') ? '' : 'none';
+  selectedUserId = '';
+  selectedRoleId = '';
+  selectedLabel = '(미선택)';
+  setTargetLabel(selectedLabel);
+}
+
+async function ensureRolesLoaded(){
+  if (rolesLoaded) return;
+  const gid = "{{ guild_id or '' }}";
+  if (!gid) return;
+  const res = await fetch(`/admin/api/roles_cache?guild_id=${gid}`);
+  const data = await res.json();
+  if (data.ok){
+    roles = data.roles || [];
+    rolesLoaded = true;
+  }
+}
+
+function setRolePickMode(mode){
+  rolePickMode = mode;
+  ensureRolesLoaded().then(()=>{
+    renderRolePickList('');
+  });
+  document.getElementById('rolePickList').style.display = '';
+}
+
+function filterRoleList(){
+  const q = (rolePickMode==='add') ? document.getElementById('addRoleSearch').value : document.getElementById('removeRoleSearch').value;
+  renderRolePickList(q || '');
+}
+
+function renderRolePickList(q){
+  const box = document.getElementById('rolePickList');
+  box.innerHTML = '';
+  const qq = (q||'').toLowerCase();
+  const filtered = roles.filter(r => (r.role_name||'').toLowerCase().includes(qq));
+  filtered.slice(0,200).forEach(r=>{
+    const div = document.createElement('div');
+    div.className='item';
+    div.textContent = `${r.role_name} (${r.role_id})`;
+    div.onclick = ()=>toggleRuleRole(r.role_id, r.role_name);
+    box.appendChild(div);
+  });
+  if (filtered.length===0){
+    const div = document.createElement('div');
+    div.className='item';
+    div.textContent = '검색 결과 없음';
+    box.appendChild(div);
+  }
+}
+
+function toggleRuleRole(roleId, roleName){
+  roleId = Number(roleId);
+  if (rolePickMode==='add'){
+    if (selectedAdd.includes(roleId)) selectedAdd = selectedAdd.filter(x=>x!==roleId);
+    else selectedAdd.push(roleId);
+  } else {
+    if (selectedRemove.includes(roleId)) selectedRemove = selectedRemove.filter(x=>x!==roleId);
+    else selectedRemove.push(roleId);
+  }
+  renderChips();
+}
+
+function renderChips(){
+  const addBox = document.getElementById('addChips');
+  const remBox = document.getElementById('removeChips');
+  addBox.innerHTML=''; remBox.innerHTML='';
+  selectedAdd.forEach(id=>{
+    const name = roles.find(r=>Number(r.role_id)===id)?.role_name || String(id);
+    const chip = document.createElement('span');
+    chip.className='chip';
+    chip.innerHTML = `<b>+</b> ${name} <span class="x" title="삭제">×</span>`;
+    chip.querySelector('.x').onclick = ()=>{ selectedAdd = selectedAdd.filter(x=>x!==id); renderChips(); };
+    addBox.appendChild(chip);
+  });
+  selectedRemove.forEach(id=>{
+    const name = roles.find(r=>Number(r.role_id)===id)?.role_name || String(id);
+    const chip = document.createElement('span');
+    chip.className='chip';
+    chip.innerHTML = `<b>-</b> ${name} <span class="x" title="삭제">×</span>`;
+    chip.querySelector('.x').onclick = ()=>{ selectedRemove = selectedRemove.filter(x=>x!==id); renderChips(); };
+    remBox.appendChild(chip);
+  });
+
+  document.getElementById('addRoleIds').value = selectedAdd.join(',');
+  document.getElementById('removeRoleIds').value = selectedRemove.join(',');
+}
+
+function clearRuleSelection(){
+  selectedAdd = [];
+  selectedRemove = [];
+  document.getElementById('addRoleSearch').value='';
+  document.getElementById('removeRoleSearch').value='';
+  document.getElementById('rolePickList').style.display='none';
+  renderChips();
+}
+
+function validateRuleForm(){
+  if (selectedAdd.length===0 && selectedRemove.length===0){
+    alert('추가/제거 역할 중 하나는 꼭 선택해야 해요.');
+    return false;
+  }
+  return true;
+}
+
+// ---- User picker ----
+let userResultsBox = document.getElementById('userResults');
+let userTimer = null;
+
+function showUserResults(list){
+  userResultsBox.style.display = '';
+  userResultsBox.innerHTML='';
+  if (!list || list.length===0){
+    const div = document.createElement('div');
+    div.className='item';
+    div.textContent='결과 없음';
+    userResultsBox.appendChild(div);
+    return;
+  }
+  list.forEach(m=>{
+    const dn = m.display_name || m.nick || m.global_name || m.username || '';
+    const div = document.createElement('div');
+    div.className='item';
+    div.textContent = `${dn} (${m.user_id})`;
+    div.onclick = ()=>selectUser(m.user_id, dn);
+    userResultsBox.appendChild(div);
+  });
+}
+
+function selectUser(uid, name){
+  selectedUserId = String(uid);
+  selectedRoleId = '';
+  selectedLabel = `유저: ${name} (${uid})`;
+  setTargetLabel(selectedLabel);
+  userResultsBox.style.display='none';
+}
+
+async function searchUsers(){
+  const gid = "{{ guild_id or '' }}";
+  const q = document.getElementById('userSearch').value.trim();
+  if (!gid) return;
+  if (userTimer) clearTimeout(userTimer);
+  userTimer = setTimeout(async ()=>{
+    if (q.length<1){ userResultsBox.style.display='none'; return; }
+    const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data.ok) showUserResults(data.members||[]);
+  }, 250);
+}
+
+async function loadAllMembers(){
+  const gid = "{{ guild_id or '' }}";
+  if (!gid) return;
+  const res = await fetch(`/admin/api/members_list?guild_id=${gid}&limit=200&offset=0`);
+  const data = await res.json();
+  if (data.ok) showUserResults(data.members||[]);
+}
+
+// ---- Role target picker ----
+function filterRoleTarget(){
+  const q = document.getElementById('roleSearchForTarget').value.trim().toLowerCase();
+  const box = document.getElementById('roleTargetResults');
+  box.style.display='';
+  box.innerHTML='';
+  const filtered = roles.filter(r => (r.role_name||'').toLowerCase().includes(q));
+  filtered.slice(0,200).forEach(r=>{
+    const div = document.createElement('div');
+    div.className='item';
+    div.textContent = `${r.role_name} (${r.role_id})`;
+    div.onclick = ()=>selectRoleTarget(r.role_id, r.role_name);
+    box.appendChild(div);
+  });
+  if (filtered.length===0){
+    const div = document.createElement('div'); div.className='item'; div.textContent='결과 없음'; box.appendChild(div);
+  }
+}
+
+function selectRoleTarget(rid, name){
+  selectedRoleId = String(rid);
+  selectedUserId = '';
+  selectedLabel = `역할: ${name} (${rid})`;
+  setTargetLabel(selectedLabel);
+  document.getElementById('roleTargetResults').style.display='none';
+}
+
+function fillTargetFields(form){
+  const type = selectedTargetType;
+  form.querySelector('input[name="target_type"]').value = type;
+  form.querySelector('input[name="user_id"]').value = selectedUserId;
+  form.querySelector('input[name="role_id"]').value = selectedRoleId;
+
+  if (type==='user' && !selectedUserId){
+    alert('유저를 선택해줘!');
+    return false;
+  }
+  if (type==='role' && !selectedRoleId){
+    alert('역할을 선택해줘!');
+    return false;
+  }
+  return true;
+}
+
+(function init(){
+  onTargetTypeChange();
+  renderChips();
+})();
+/* ---- Reaction block UI ---- */
+let rbSelected = [];
+
+function rbOpen(){
+  ensureRolesLoaded().then(()=>{ rbRender(''); });
+  document.getElementById('rbList').style.display = '';
+}
+function rbFilter(){
+  const q = document.getElementById('rbRoleSearch').value || '';
+  rbRender(q);
+}
+function rbRender(q){
+  if (!rolesLoaded) return;
+  const list = document.getElementById('rbList');
+  const query = (q||'').toLowerCase();
+  const filtered = roles.filter(r => (r.role_name||'').toLowerCase().includes(query)).slice(0, 40);
+  list.innerHTML = filtered.map(r=>{
+    const rid = String(r.role_id);
+    const picked = rbSelected.includes(rid);
+    return `<div class="item" onclick="rbToggle('${rid}', '${escapeHtml(r.role_name||'')}')">
+      <span>${escapeHtml(r.role_name||'-')}</span>
+      <span class="muted mono">${rid}${picked ? ' ✅' : ''}</span>
+    </div>`;
+  }).join('') || `<div class="small muted">검색 결과가 없어요.</div>`;
+}
+function rbToggle(rid, name){
+  const i = rbSelected.indexOf(rid);
+  if (i>=0) rbSelected.splice(i,1); else rbSelected.push(rid);
+  rbUpdate();
+  rbRender(document.getElementById('rbRoleSearch').value || '');
+}
+function rbUpdate(){
+  document.getElementById('rbRoleIds').value = rbSelected.join(',');
+  const chips = document.getElementById('rbChips');
+  chips.innerHTML = rbSelected.map(rid=>{
+    const r = roles.find(x=>String(x.role_id)===String(rid));
+    const nm = r ? (r.role_name||rid) : rid;
+    return `<span class="chip">${escapeHtml(nm)} <b onclick="event.stopPropagation(); rbToggle('${rid}','')">×</b></span>`;
+  }).join('');
+}
+function rbValidate(){
+  const ch = document.getElementById('rbChannel').value;
+  const msg = document.getElementById('rbMessage').value || '';
+  const hasMsg = (msg.match(/\d{10,25}/g)||[]).length>0;
+  if (!ch){ alert('채널을 선택하세요.'); return false; }
+  if (!hasMsg){ alert('메시지 링크/ID를 입력하세요.'); return false; }
+  if (rbSelected.length===0){ alert('차단할 역할을 1개 이상 선택하세요.'); return false; }
+  return true;
+}
+
+</script>
+</body>
+</html>
