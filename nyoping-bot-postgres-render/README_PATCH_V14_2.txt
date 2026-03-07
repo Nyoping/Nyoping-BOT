@@ -1,0 +1,1 @@
+V14.2 community_features 전체 교체 핫픽스\n- _refresh_leaderboard_for_guild 누락/중복/잘못된 들여쓰기 문제 해결\n- community_features.py 파일 전체를 정상본으로 교체\n
