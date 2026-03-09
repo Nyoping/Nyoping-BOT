@@ -68,7 +68,7 @@
     .admin-pane{display:none}
     .admin-pane.active{display:block}
     .admin-pane.section-card{padding-top:18px}
-    #pane-quick,#pane-levelroles,#pane-reactionblock,#pane-reactionroles,#pane-leaderboard{margin-top:14px}
+    #pane-quick,#pane-levelroles,#pane-reactionblock,#pane-reactionroles,#pane-leaderboard,#pane-developer{margin-top:14px}
 .settings-group{display:none}
     .settings-group.active{display:block}
     .channel-pill,.chip{display:inline-flex;align-items:center;gap:6px;background:#0b1220;border:1px solid #2b3a60;border-radius:999px;padding:6px 10px;font-size:12px;margin:4px 6px 0 0}.chip .x{cursor:pointer;color:#fca5a5;font-weight:700}
@@ -120,6 +120,7 @@
       <button type="button" class="navbtn" data-pane-target="channels" onclick="showPane('channels')">채널 제어</button>
       <button type="button" class="navbtn" data-pane-target="reaction" onclick="showPane('reaction')">반응</button>
       <button type="button" class="navbtn" data-pane-target="leaderboard" onclick="showPane('leaderboard')">서버 랭킹</button>
+      <button type="button" class="navbtn" data-pane-target="developer" onclick="showPane('developer')">개발자</button>
     </aside>
     <div class="pane-wrap">
   <div class="card admin-pane active" id="pane-settings">
@@ -936,6 +937,20 @@
 
 </div>
 
+  <div class="card admin-pane section-card hidden" id="pane-developer">
+    <h2>개발자</h2>
+    <div class="grid">
+      <div class="subcard">
+        <strong>개발자</strong>
+        <p>뇨핑 nyoping</p>
+      </div>
+      <div class="subcard">
+        <strong>지원겸 종합게임 서버</strong>
+        <p><a href="https://discord.gg/SUq8a4j4xB" target="_blank" rel="noopener noreferrer">https://discord.gg/SUq8a4j4xB</a></p>
+      </div>
+    </div>
+  </div>
+
 <script>
 
 function escapeHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
@@ -1456,7 +1471,7 @@ let currentAdminPane = 'levelsettings';
 let currentSettingsGroup = 'levelsettings';
 
 function normalizeAdminPane(name){
-  const allowed = new Set(['levelsettings', 'autogreet', 'channels', 'reaction', 'leaderboard']);
+  const allowed = new Set(['levelsettings', 'autogreet', 'channels', 'reaction', 'leaderboard', 'developer']);
   const v = String(name || '').trim().toLowerCase();
   return allowed.has(v) ? v : 'levelsettings';
 }
@@ -1519,9 +1534,10 @@ function showPane(name){
   const reactionBlockPane = document.getElementById('pane-reactionblock');
   const reactionRolesPane = document.getElementById('pane-reactionroles');
   const leaderboardPane = document.getElementById('pane-leaderboard');
+  const developerPane = document.getElementById('pane-developer');
 
   document.querySelectorAll('.navbtn').forEach(el=>el.classList.remove('active'));
-  [settingsPane, quickPane, levelPane, reactionBlockPane, reactionRolesPane, leaderboardPane].forEach(p => {
+  [settingsPane, quickPane, levelPane, reactionBlockPane, reactionRolesPane, leaderboardPane, developerPane].forEach(p => {
     if (!p) return;
     p.classList.add('hidden');
     p.classList.remove('active');
@@ -1556,6 +1572,9 @@ function showPane(name){
   } else if (currentAdminPane === 'leaderboard') {
     openPane(leaderboardPane);
     leaderboardPane?.scrollIntoView({behavior:'smooth', block:'start'});
+  } else if (currentAdminPane === 'developer') {
+    openPane(developerPane);
+    developerPane?.scrollIntoView({behavior:'smooth', block:'start'});
   }
 
   const btn = document.querySelector(`.navbtn[data-pane-target="${currentAdminPane}"]`);

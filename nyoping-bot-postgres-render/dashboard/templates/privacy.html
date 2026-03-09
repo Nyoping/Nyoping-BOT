@@ -67,12 +67,13 @@
         <div class="subcard">
           <strong>개발자</strong>
           <p>{{ developer_name }}</p>
-        </div>
-        <div class="subcard">
-          <strong>문의 이메일</strong>
-          <p>{{ contact_email }}</p>
-        </div>
-        <div class="subcard">
+        </div>{% if contact_email %}
+<div class="subcard">
+  <strong>문의 이메일</strong>
+  <p>{{ contact_email }}</p>
+</div>
+{% endif %}
+<div class="subcard">
           <strong>지원 서버</strong>
           {% if support_server_url %}
           <p><a href="{{ support_server_url }}" target="_blank" rel="noopener noreferrer">{{ support_server_url }}</a></p>

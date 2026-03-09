@@ -92,15 +92,15 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 def _developer_name() -> str:
-    return _env("DEVELOPER_NAME", "뇨핑봇 개발자")
+    return _env("DEVELOPER_NAME", "뇨핑 nyoping")
 
 
 def _legal_contact_email() -> str:
-    return _env("LEGAL_CONTACT_EMAIL", "you@example.com")
+    return _env("LEGAL_CONTACT_EMAIL", "")
 
 
 def _support_server_url() -> str:
-    return _env("SUPPORT_SERVER_URL", "")
+    return _env("SUPPORT_SERVER_URL", "https://discord.gg/SUq8a4j4xB")
 
 
 def _legal_effective_date() -> str:
@@ -114,6 +114,8 @@ def _legal_base_context(request: Request, *, page_title: str, page_key: str) -> 
         "page_key": page_key,
         "app_name": "뇨핑봇",
         "developer_name": _developer_name(),
+            "support_server_url": _support_server_url(),
+            "contact_email": _legal_contact_email(),
         "contact_email": _legal_contact_email(),
         "support_server_url": _support_server_url(),
         "effective_date": _legal_effective_date(),
