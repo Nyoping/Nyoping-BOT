@@ -97,7 +97,8 @@
         <select name="guild_id" required>
           <option value="">서버를 선택하세요</option>
           {% for g in guilds %}
-            <option value="{{ g.guild_id }}" {% if (guild_id|string) == (g.guild_id|string) %}selected{% endif %}>{{ g.guild_name if g.guild_name else ('서버 ' ~ g.guild_id) }}{% if g.guild_name %} · {{ g.guild_id }}{% endif %}</option>
+            {% set _gname = (g.guild_name|string).strip() if g.guild_name is not none else '' %}
+            <option value="{{ g.guild_id }}" {% if (guild_id|string) == (g.guild_id|string) %}selected{% endif %}>{{ _gname if _gname else ('서버 ' ~ g.guild_id) }} · {{ g.guild_id }}</option>
           {% endfor %}
         </select>
         {% if not guilds or guilds|length == 0 %}<div class="small" style="margin-top:6px;color:#fca5a5">서버 목록이 비어 있어요. 봇이 DB 캐시를 한 번 이상 동기화할 때까지 잠시 기다린 뒤 새로고침해 보세요.</div>{% endif %}
@@ -523,11 +524,21 @@
 <h3 id="section-channel-control" style="margin:0 0 8px">채널 제어 / 알림</h3>
 <label>초대 링크 금지 채널</label>
 <div class="small">현재 설정된 채널</div>
-<div id="inviteBlockChips" class="chips"></div>
+<div id="inviteBlockChips" class="chips">
+  {% set _invite_ids = settings.invite_block_channel_ids or [] %}
+  {% if _invite_ids and _invite_ids|length > 0 %}
+    {% for _cid in _invite_ids %}
+      {% set _cname = channel_name_map_text.get(_cid|string) if channel_name_map_text else '' %}
+      <span class="chip">{{ (_cname ~ ' · ' ~ _cid) if _cname else ('채널 ' ~ _cid) }}</span>
+    {% endfor %}
+  {% else %}
+    <span class="chip">설정된 채널 없음</span>
+  {% endif %}
+</div>
 <input type="hidden" name="invite_block_channel_ids" id="inviteBlockChannelIds" value="{{ (settings.invite_block_channel_ids or []) | join(' ') }}">
 <div class="channel-picker" id="inviteBlockPicker">
   {% for c in text_channels %}
-    <div class="item" onclick="toggleChannelSelection('invite', '{{ c.channel_id }}')">
+    <div class="item" data-channel-id="{{ c.channel_id }}" onclick="toggleChannelSelection('invite', '{{ c.channel_id }}')">
       <span>{{ c.channel_name }} · {{ c.channel_id }}</span><span class="muted">선택</span>
     </div>
   {% endfor %}
@@ -1043,13 +1054,18 @@ function renderChips(){
 }
 
 
-function uniqueIds(arr){ return [...new Set((arr||[]).map(v=>String(v)).filter(Boolean))]; }
+function uniqueIds(arr){ return [...new Set((arr||[]).map(v=>String(v).trim()).filter(Boolean))]; }
+function parseIdListValue(raw){
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  return uniqueIds((text.match(/\d+/g) || []));
+}
 let selectedInviteChannels = [];
 let selectedBotOnlyChannels = [];
 
 function initChannelSelections(){
   const inviteVal = (document.getElementById('inviteBlockChannelIds')?.value || '').trim();
-  selectedInviteChannels = uniqueIds(inviteVal ? inviteVal.split(/[\s,]+/g) : []);
+  selectedInviteChannels = parseIdListValue(inviteVal);
   selectedBotOnlyChannels = [];
   renderChannelSelection('invite');
 }
@@ -1072,7 +1088,8 @@ function renderChannelSelection(kind){
   list.forEach(id=>{
     const chip = document.createElement('span');
     chip.className = 'chip';
-    const item = document.querySelector(`#${pickerId} .item[onclick*="'${id}'"]`);
+    let item = document.querySelector(`#${pickerId} .item[data-channel-id="${id}"]`);
+    if (!item) item = document.querySelector(`#${pickerId} .item[onclick*="'${id}'"]`);
     if (item) item.classList.add('selected');
     const label = item ? item.textContent.replace(/선택\s*$/, '').trim() : ('채널 ' + id);
     chip.innerHTML = `${escapeHtml(label)} <span class="x">×</span>`;
@@ -1564,6 +1581,7 @@ document.addEventListener('DOMContentLoaded', function(){
   initWelcomePreviewInteractions();
   initChannelSelections();
   initializeAdminPanes();
+  setTimeout(() => initChannelSelections(), 30);
   setTimeout(async ()=>{
     try{
       const gid = '{{ guild_id or "" }}';

@@ -846,12 +846,25 @@ async def _list_guilds_for_admin(pool: asyncpg.Pool) -> list[dict[str, Any]]:
                 continue
             name = str(rd.get("guild_name") or "").strip()
             item = out_map.get(gid) or {"guild_id": gid, "guild_name": ""}
-            if name and not item.get("guild_name"):
+            if name and not _is_placeholder_guild_name(name, gid) and not item.get("guild_name"):
                 item["guild_name"] = name
             out_map[gid] = item
 
     out = list(out_map.values())
-    out.sort(key=lambda x: (0 if x.get("guild_name") else 1, str(x.get("guild_name") or ""), int(x["guild_id"])))
+    for item in out:
+        gid = int(item.get("guild_id") or 0)
+        current_name = str(item.get("guild_name") or "").strip()
+        if gid > 0 and _is_placeholder_guild_name(current_name, gid):
+            try:
+                resolved_name = await _guild_name(pool, gid)
+            except Exception:
+                resolved_name = current_name
+            if resolved_name and not _is_placeholder_guild_name(str(resolved_name), gid):
+                item["guild_name"] = str(resolved_name).strip()
+            else:
+                item["guild_name"] = current_name
+
+    out.sort(key=lambda x: (0 if x.get("guild_name") and not _is_placeholder_guild_name(str(x.get("guild_name") or ""), int(x.get("guild_id") or 0)) else 1, str(x.get("guild_name") or ""), int(x["guild_id"])))
     return out
 
 async def _ensure_guild_settings(pool: asyncpg.Pool, guild_id: int) -> None:
@@ -1069,6 +1082,7 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "rules": rules,
             "role_name_map": role_name_map,
             "channel_name_map": channel_name_map,
+            "channel_name_map_text": {str(k): v for k, v in channel_name_map.items()},
             "rank_rows": rank_rows,
             "rank_total": rank_total,
             "rank_page": max(1, int(rank_page or 1)),
