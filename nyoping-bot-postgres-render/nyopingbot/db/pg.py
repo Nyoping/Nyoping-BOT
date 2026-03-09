@@ -85,6 +85,12 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
 
         # ---- Migrations for newer features ----
         # guild_settings: streak bonus settings
+        # guild_settings: voice xp controls
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_enabled BOOLEAN NOT NULL DEFAULT TRUE;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_interval_min INTEGER NOT NULL DEFAULT 1;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_amount INTEGER NOT NULL DEFAULT 2;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_daily_cap INTEGER NOT NULL DEFAULT 0;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_block_delay_min INTEGER NOT NULL DEFAULT 1;")
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_per_day INTEGER NOT NULL DEFAULT 0;")
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_cap INTEGER NOT NULL DEFAULT 0;")
 # delivery mode settings

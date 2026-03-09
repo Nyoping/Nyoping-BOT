@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import re
 import math
 import io
@@ -8,6 +9,7 @@ import json
 import uuid
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import asyncpg
 import requests
@@ -535,6 +537,12 @@ MIGRATIONS_SQL = [
     # streak settings
     "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_per_day INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_cap INTEGER NOT NULL DEFAULT 0;",
+    # voice xp controls
+    "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_enabled BOOLEAN NOT NULL DEFAULT TRUE;",
+    "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_interval_min INTEGER NOT NULL DEFAULT 1;",
+    "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_amount INTEGER NOT NULL DEFAULT 2;",
+    "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_daily_cap INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_block_delay_min INTEGER NOT NULL DEFAULT 1;",
     # streak table
     """CREATE TABLE IF NOT EXISTS checkin_streaks (
         guild_id BIGINT NOT NULL,
@@ -678,6 +686,28 @@ MIGRATIONS_SQL = [
     );""",
 ]
 
+
+_RUNTIME_SCHEMA_LOCK: asyncio.Lock | None = None
+_RUNTIME_SCHEMA_READY = False
+
+async def _ensure_runtime_schema(pool: asyncpg.Pool) -> None:
+    global _RUNTIME_SCHEMA_LOCK, _RUNTIME_SCHEMA_READY
+    if _RUNTIME_SCHEMA_READY:
+        return
+    if _RUNTIME_SCHEMA_LOCK is None:
+        _RUNTIME_SCHEMA_LOCK = asyncio.Lock()
+    async with _RUNTIME_SCHEMA_LOCK:
+        if _RUNTIME_SCHEMA_READY:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(SCHEMA_SQL)
+            for q in MIGRATIONS_SQL:
+                try:
+                    await conn.execute(q)
+                except Exception:
+                    pass
+        _RUNTIME_SCHEMA_READY = True
+
 def _env(name: str, default: str = "") -> str:
     return str(os.getenv(name, default) or default)
 
@@ -778,6 +808,7 @@ async def _enqueue_all_members_role_sync(pool: asyncpg.Pool, guild_id: int) -> i
 async def _ensure_pool(app: FastAPI) -> asyncpg.Pool:
     pool = app.state.pool
     if pool:
+        await _ensure_runtime_schema(pool)
         return pool
     raise RuntimeError("DB pool not initialized")
 
@@ -824,6 +855,7 @@ async def _list_guilds_for_admin(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     return out
 
 async def _ensure_guild_settings(pool: asyncpg.Pool, guild_id: int) -> None:
+    await _ensure_runtime_schema(pool)
     await pool.execute("INSERT INTO guild_settings (guild_id) VALUES ($1) ON CONFLICT (guild_id) DO NOTHING", guild_id)
 
 async def _get_settings(pool: asyncpg.Pool, guild_id: int) -> dict[str, Any]:
@@ -893,14 +925,7 @@ async def startup():
     if not db_url:
         raise RuntimeError("DATABASE_URL 환경변수가 필요합니다.")
     pool = await asyncpg.create_pool(dsn=db_url, min_size=1, max_size=5, command_timeout=30)
-    async with pool.acquire() as conn:
-        await conn.execute(SCHEMA_SQL)
-        for q in MIGRATIONS_SQL:
-            try:
-                await conn.execute(q)
-            except Exception:
-                # some ALTERs may fail if permissions; ignore
-                pass
+    await _ensure_runtime_schema(pool)
     app.state.pool = pool
 
 @app.on_event("shutdown")
@@ -1206,6 +1231,35 @@ async def test_welcome_message(request: Request):
         log.exception("test-welcome failed")
         return JSONResponse({"ok": False, "error": "exception", "message": "테스트 메시지 전송 중 오류가 발생했어요."}, status_code=500)
 
+def _normalize_admin_pane(value: str | None, default: str = "levelsettings") -> str:
+    allowed = {"levelsettings", "autogreet", "channels", "reaction", "leaderboard"}
+    v = str(value or "").strip().lower()
+    return v if v in allowed else default
+
+def _normalize_admin_group(value: str | None, default: str = "levelsettings") -> str:
+    allowed = {"levelsettings", "autogreet", "channels"}
+    v = str(value or "").strip().lower()
+    return v if v in allowed else default
+
+def _admin_redirect_url(
+    guild_id: int,
+    msg: str | None = None,
+    *,
+    pane: str | None = None,
+    group: str | None = None,
+    rank_page: int | None = None,
+) -> str:
+    params: dict[str, Any] = {"guild_id": int(guild_id)}
+    if msg:
+        params["msg"] = str(msg)
+    if pane:
+        params["pane"] = _normalize_admin_pane(pane)
+    if group and params.get("pane") in {"levelsettings", "autogreet", "channels"}:
+        params["group"] = _normalize_admin_group(group)
+    if rank_page and int(rank_page) > 1:
+        params["rank_page"] = int(rank_page)
+    return "/admin?" + urlencode(params)
+
 @app.post("/admin/save-settings")
 async def save_settings(
     request: Request,
@@ -1273,6 +1327,8 @@ welcome_text3_box_width: int = Form(500),
     voice_afk_disconnect_delay_sec: int = Form(60),
     leaderboard_channel_id: str = Form(""),
     voice_dm_summary_enabled: str = Form("on"),
+    return_pane: str = Form("levelsettings"),
+    return_group: str = Form("levelsettings"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1344,7 +1400,7 @@ welcome_text3_box_width=int(welcome_text3_box_width or 500),
         leaderboard_channel_id=int(leaderboard_channel_id or 0),
         voice_dm_summary_enabled=(_normalize_auto_delivery_mode(voice_xp_delivery_mode, "dm") != "off"),
     )
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=설정+저장+완료", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "설정 저장 완료", pane=return_pane, group=return_group), status_code=302)
 
 async def _resolve_target_user_ids(pool: asyncpg.Pool, guild_id: int, target_type: str, user_id: str, role_id: str) -> list[int]:
     if target_type == "role":
@@ -1366,7 +1422,8 @@ async def quick_reset_checkin(
     target_type: str = Form("user"),
     user_id: str = Form(""),
     role_id: str = Form(""),
-    ymd: str = Form(""),
+    ymd: str = Form(""),    return_pane: str = Form("levelsettings"),
+    return_group: str = Form("levelsettings"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1374,13 +1431,13 @@ async def quick_reset_checkin(
     ymd = ymd.strip() or kst_today_ymd()
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
     if not user_ids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=대상+유저가+없어요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "대상 유저가 없어요", pane=return_pane, group=return_group), status_code=302)
 
     await pool.execute(
         "DELETE FROM checkins WHERE guild_id=$1 AND ymd=$2 AND user_id = ANY($3::BIGINT[])",
         int(guild_id), ymd, user_ids
     )
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=출석+초기화+완료({len(user_ids)}명)", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"출석 초기화 완료({len(user_ids)}명)", pane=return_pane, group=return_group), status_code=302)
 
 @app.post("/admin/quick-set-level")
 async def quick_set_level(
@@ -1389,14 +1446,15 @@ async def quick_set_level(
     target_type: str = Form("user"),
     user_id: str = Form(""),
     role_id: str = Form(""),
-    level: int = Form(...),
+    level: int = Form(...),    return_pane: str = Form("levelsettings"),
+    return_group: str = Form("levelsettings"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
     if not user_ids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=대상+유저가+없어요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "대상 유저가 없어요", pane=return_pane, group=return_group), status_code=302)
 
     xp = max(0, int(level)) * 100
 
@@ -1416,7 +1474,7 @@ async def quick_set_level(
         int(guild_id), user_ids
     )
 
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=레벨+적용+완료({len(user_ids)}명)+-+역할동기화+대기", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"레벨 적용 완료({len(user_ids)}명) - 역할동기화 대기", pane=return_pane, group=return_group), status_code=302)
 
 @app.post("/admin/rules-upsert")
 async def rules_upsert(
@@ -1424,7 +1482,8 @@ async def rules_upsert(
     guild_id: int = Form(...),
     level: int = Form(...),
     add_role_ids: str = Form(""),
-    remove_role_ids: str = Form(""),
+    remove_role_ids: str = Form(""),    return_pane: str = Form("levelsettings"),
+    return_group: str = Form("levelsettings"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1432,7 +1491,7 @@ async def rules_upsert(
     add_ids = _parse_ids(add_role_ids)
     rem_ids = _parse_ids(remove_role_ids)
     if not add_ids and not rem_ids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=추가/제거+역할+중+하나는+필수", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "추가/제거 역할 중 하나는 필수", pane=return_pane, group=return_group), status_code=302)
 
     await pool.execute(
         """INSERT INTO level_role_sets (guild_id, level, add_role_ids, remove_role_ids)
@@ -1442,7 +1501,7 @@ async def rules_upsert(
     )
 
     queued = await _enqueue_all_members_role_sync(pool, int(guild_id))
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=규칙+저장+완료(역할동기화+큐+{queued}건)", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"규칙 저장 완료(역할동기화 큐 {queued}건)", pane=return_pane, group=return_group), status_code=302)
 
 @app.post("/admin/rules-delete")
 async def rules_delete(request: Request, guild_id: int = Form(...), level: int = Form(...)):
@@ -1451,7 +1510,7 @@ async def rules_delete(request: Request, guild_id: int = Form(...), level: int =
     pool = await _ensure_pool(app)
     await pool.execute("DELETE FROM level_role_sets WHERE guild_id=$1 AND level=$2", int(guild_id), int(level))
     queued = await _enqueue_all_members_role_sync(pool, int(guild_id))
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=규칙+삭제+완료(역할동기화+큐+{queued}건)", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"규칙 삭제 완료(역할동기화 큐 {queued}건)", pane=return_pane, group=return_group), status_code=302)
 
 @app.post("/admin/reaction-block-add")
 async def reaction_block_add(
@@ -1459,7 +1518,7 @@ async def reaction_block_add(
     guild_id: int = Form(...),
     channel_id: str = Form(...),
     message: str = Form(...),
-    blocked_role_ids: str = Form(""),
+    blocked_role_ids: str = Form(""),    return_pane: str = Form("reaction"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1467,14 +1526,14 @@ async def reaction_block_add(
     # parse
     mids = _parse_ids(message)
     if not mids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=메시지+ID(또는+링크)를+입력하세요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "메시지 ID(또는 링크)를 입력하세요", pane=return_pane), status_code=302)
     msg_id = int(mids[0])
     if not str(channel_id).isdigit():
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=채널을+선택하세요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "채널을 선택하세요", pane=return_pane), status_code=302)
     cid = int(channel_id)
     rids = _parse_ids(blocked_role_ids)
     if not rids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=차단할+역할을+선택하세요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "차단할 역할을 선택하세요", pane=return_pane), status_code=302)
 
     await pool.execute(
         """INSERT INTO reaction_blocks (guild_id, channel_id, message_id, blocked_role_id, updated_at)
@@ -1483,14 +1542,14 @@ async def reaction_block_add(
            DO UPDATE SET channel_id=EXCLUDED.channel_id, updated_at=NOW()""",
         int(guild_id), int(cid), int(msg_id), rids
     )
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응차단+저장+완료({len(rids)}개)", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"반응차단 저장 완료({len(rids)}개)", pane=return_pane), status_code=302)
 
 @app.post("/admin/reaction-block-delete")
 async def reaction_block_delete(
     request: Request,
     guild_id: int = Form(...),
     message_id: int = Form(...),
-    role_id: int = Form(...),
+    role_id: int = Form(...),    return_pane: str = Form("reaction"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1499,7 +1558,7 @@ async def reaction_block_delete(
         "DELETE FROM reaction_blocks WHERE guild_id=$1 AND message_id=$2 AND blocked_role_id=$3",
         int(guild_id), int(message_id), int(role_id)
     )
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응차단+삭제+완료", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응차단 삭제 완료", pane=return_pane), status_code=302)
 
 
 
@@ -1511,26 +1570,26 @@ async def reaction_role_upsert(
     message: str = Form(...),
     emoji: str = Form(...),
     add_role_ids: str = Form(""),
-    remove_role_ids: str = Form(""),
+    remove_role_ids: str = Form(""),    return_pane: str = Form("reaction"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
     mids = _parse_ids(message)
     if not mids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=메시지+ID(또는+링크)를+입력하세요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "메시지 ID(또는 링크)를 입력하세요", pane=return_pane), status_code=302)
     msg_id = int(mids[0])
     if not str(channel_id).isdigit():
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=채널을+선택하세요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "채널을 선택하세요", pane=return_pane), status_code=302)
     cid = int(channel_id)
     ek = _parse_emoji_key(emoji)
     if not ek:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=이모지를+입력하세요", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "이모지를 입력하세요", pane=return_pane), status_code=302)
 
     add_ids = _parse_ids(add_role_ids)
     rem_ids = _parse_ids(remove_role_ids)
     if not add_ids and not rem_ids:
-        return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=추가/제거+역할+중+하나는+필수", status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "추가/제거 역할 중 하나는 필수", pane=return_pane), status_code=302)
 
     await pool.execute(
         """INSERT INTO reaction_role_rules (guild_id, channel_id, message_id, emoji_key, add_role_ids, remove_role_ids, updated_at)
@@ -1540,7 +1599,7 @@ async def reaction_role_upsert(
         int(guild_id), int(cid), int(msg_id), str(ek), add_ids, rem_ids
     )
 
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응역할+저장+완료", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응역할 저장 완료", pane=return_pane), status_code=302)
 
 
 @app.post("/admin/reaction-role-delete")
@@ -1548,7 +1607,7 @@ async def reaction_role_delete(
     request: Request,
     guild_id: int = Form(...),
     message_id: int = Form(...),
-    emoji_key: str = Form(...),
+    emoji_key: str = Form(...),    return_pane: str = Form("reaction"),
 ):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1557,7 +1616,7 @@ async def reaction_role_delete(
         "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
         int(guild_id), int(message_id), str(emoji_key)
     )
-    return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=반응역할+삭제+완료", status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응역할 삭제 완료", pane=return_pane), status_code=302)
 
 # ---- APIs for UI (DB cache only, no Discord REST) ----
 @app.get("/admin/api/roles_search")
