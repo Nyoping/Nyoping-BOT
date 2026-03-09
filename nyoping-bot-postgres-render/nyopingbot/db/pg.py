@@ -26,6 +26,23 @@ CREATE TABLE IF NOT EXISTS voice_xp_daily (
   PRIMARY KEY (guild_id, user_id, ymd)
 );
 
+CREATE TABLE IF NOT EXISTS bot_activity_logs (
+  id BIGSERIAL PRIMARY KEY,
+  guild_id BIGINT NOT NULL,
+  user_id BIGINT NULL,
+  action_type TEXT NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT '',
+  target_channel_id BIGINT NULL,
+  xp_delta INTEGER NOT NULL DEFAULT 0,
+  level_before INTEGER NULL,
+  level_after INTEGER NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_activity_logs_guild_created
+  ON bot_activity_logs (guild_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS user_stats (
   guild_id BIGINT NOT NULL,
   user_id BIGINT NOT NULL,
@@ -92,6 +109,20 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_daily_cap INTEGER NOT NULL DEFAULT 0;")
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_block_delay_min INTEGER NOT NULL DEFAULT 1;")
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_per_day INTEGER NOT NULL DEFAULT 0;")
+        await conn.execute("""CREATE TABLE IF NOT EXISTS bot_activity_logs (
+          id BIGSERIAL PRIMARY KEY,
+          guild_id BIGINT NOT NULL,
+          user_id BIGINT NULL,
+          action_type TEXT NOT NULL,
+          delivery_mode TEXT NOT NULL DEFAULT '',
+          target_channel_id BIGINT NULL,
+          xp_delta INTEGER NOT NULL DEFAULT 0,
+          level_before INTEGER NULL,
+          level_after INTEGER NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );""")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_bot_activity_logs_guild_created ON bot_activity_logs (guild_id, created_at DESC);")
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_cap INTEGER NOT NULL DEFAULT 0;")
 # delivery mode settings
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';")
@@ -272,6 +303,54 @@ async def add_voice_xp_daily(pool: asyncpg.Pool, guild_id: int, user_id: int, ym
             int(guild_id), int(user_id), str(ymd),
         )
     return int(row["xp"]) if row else 0
+
+
+async def add_activity_log(
+    pool: asyncpg.Pool,
+    guild_id: int,
+    user_id: int | None,
+    action_type: str,
+    *,
+    delivery_mode: str = "",
+    target_channel_id: int | None = None,
+    xp_delta: int = 0,
+    level_before: int | None = None,
+    level_after: int | None = None,
+    summary: str = "",
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO bot_activity_logs (
+                guild_id, user_id, action_type, delivery_mode,
+                target_channel_id, xp_delta, level_before, level_after, summary
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            """,
+            int(guild_id),
+            int(user_id) if user_id is not None else None,
+            str(action_type or "event"),
+            str(delivery_mode or ""),
+            int(target_channel_id) if target_channel_id else None,
+            int(xp_delta or 0),
+            int(level_before) if level_before is not None else None,
+            int(level_after) if level_after is not None else None,
+            str(summary or "")[:500],
+        )
+
+async def list_activity_logs(pool: asyncpg.Pool, guild_id: int, limit: int = 50):
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM bot_activity_logs
+            WHERE guild_id=$1
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2
+            """,
+            int(guild_id),
+            max(1, min(int(limit or 50), 200)),
+        )
 
 async def get_user_xp(pool: asyncpg.Pool, guild_id: int, user_id: int) -> int:
     async with pool.acquire() as conn:

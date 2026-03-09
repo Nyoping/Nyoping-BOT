@@ -26,6 +26,7 @@ from ..db import (
     get_current_member_rank,
     get_voice_xp_daily,
     add_voice_xp_daily,
+    add_activity_log,
 )
 from ..utils import kst_today_ymd, kst_yesterday_ymd, xp_to_level
 from ..role_sync import compute_expected_and_managed_roles, sync_member_roles
@@ -36,6 +37,38 @@ log = logging.getLogger(__name__)
 def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
+
+
+async def _safe_add_activity_log(
+    bot: commands.Bot,
+    guild_id: int | None,
+    user_id: int | None,
+    action_type: str,
+    *,
+    delivery_mode: str = "",
+    target_channel_id: int | None = None,
+    xp_delta: int = 0,
+    level_before: int | None = None,
+    level_after: int | None = None,
+    summary: str = "",
+) -> None:
+    try:
+        if not getattr(bot, "db_pool", None) or not guild_id:
+            return
+        await add_activity_log(
+            bot.db_pool,
+            int(guild_id),
+            int(user_id) if user_id is not None else None,
+            str(action_type or "event"),
+            delivery_mode=str(delivery_mode or ""),
+            target_channel_id=int(target_channel_id) if target_channel_id else None,
+            xp_delta=int(xp_delta or 0),
+            level_before=int(level_before) if level_before is not None else None,
+            level_after=int(level_after) if level_after is not None else None,
+            summary=str(summary or "")[:500],
+        )
+    except Exception:
+        log.exception("activity log write failed guild=%s user=%s action=%s", guild_id, user_id, action_type)
 
 def _voice_state_blocked(state: discord.VoiceState | None) -> bool:
     if state is None:
@@ -166,6 +199,7 @@ def _normalize_auto_delivery_mode(value: str | None, default: str = "channel") -
     mode = str(value or default).strip().lower()
     return mode if mode in {"channel", "dm", "off"} else default
 
+
 async def _deliver_command_result(
     bot: commands.Bot,
     interaction: discord.Interaction,
@@ -174,24 +208,76 @@ async def _deliver_command_result(
     content: str | None = None,
     embed: discord.Embed | None = None,
     view: discord.ui.View | None = None,
+    action_type: str = "command",
+    log_user_id: int | None = None,
+    xp_delta: int = 0,
+    level_before: int | None = None,
+    level_after: int | None = None,
 ) -> None:
     mode = _normalize_command_delivery_mode(mode, "ephemeral")
+    summary = (content or getattr(embed, "title", None) or "명령 결과")[:500]
+    target_user_id = int(log_user_id) if log_user_id is not None else int(getattr(interaction.user, "id", 0) or 0)
+
     if mode == "ephemeral":
         await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=True)
+        await _safe_add_activity_log(
+            bot,
+            getattr(interaction.guild, "id", None),
+            target_user_id or None,
+            action_type,
+            delivery_mode="ephemeral",
+            xp_delta=xp_delta,
+            level_before=level_before,
+            level_after=level_after,
+            summary=summary,
+        )
         return
 
     if mode == "dm":
         try:
             await interaction.user.send(content=content, embed=embed, view=view)
             await interaction.followup.send("DM으로 보냈어요.", ephemeral=True)
+            await _safe_add_activity_log(
+                bot,
+                getattr(interaction.guild, "id", None),
+                target_user_id or None,
+                action_type,
+                delivery_mode="dm",
+                xp_delta=xp_delta,
+                level_before=level_before,
+                level_after=level_after,
+                summary=summary,
+            )
             return
         except Exception:
             await interaction.followup.send(content=content or "DM 전송에 실패해서 본인만 보기로 대신 보여드려요.", embed=embed, view=view, ephemeral=True)
+            await _safe_add_activity_log(
+                bot,
+                getattr(interaction.guild, "id", None),
+                target_user_id or None,
+                action_type,
+                delivery_mode="ephemeral",
+                xp_delta=xp_delta,
+                level_before=level_before,
+                level_after=level_after,
+                summary=(summary + " [DM 실패로 본인만 보기 대체]")[:500],
+            )
             return
 
     ch = await _resolve_notify_channel(bot, interaction.guild)
     if ch is None:
         await interaction.followup.send(content=content or "공개 알림 채널이 설정되지 않아서 본인만 보기로 대신 보여드려요.", embed=embed, view=view, ephemeral=True)
+        await _safe_add_activity_log(
+            bot,
+            getattr(interaction.guild, "id", None),
+            target_user_id or None,
+            action_type,
+            delivery_mode="ephemeral",
+            xp_delta=xp_delta,
+            level_before=level_before,
+            level_after=level_after,
+            summary=(summary + " [공개 채널 미설정으로 본인만 보기 대체]")[:500],
+        )
         return
 
     await ch.send(content=content, embed=embed, view=view)
@@ -200,6 +286,19 @@ async def _deliver_command_result(
     except Exception:
         mention = "#알림채널"
     await interaction.followup.send(f"{mention} 채널로 보냈어요.", ephemeral=True)
+    await _safe_add_activity_log(
+        bot,
+        getattr(interaction.guild, "id", None),
+        target_user_id or None,
+        action_type,
+        delivery_mode="channel",
+        target_channel_id=getattr(ch, "id", None),
+        xp_delta=xp_delta,
+        level_before=level_before,
+        level_after=level_after,
+        summary=summary,
+    )
+
 
 async def _send_auto_notice(
     bot: commands.Bot,
@@ -208,14 +307,32 @@ async def _send_auto_notice(
     *,
     mode: str,
     text: str,
+    action_type: str = "auto_notice",
+    xp_delta: int = 0,
+    level_before: int | None = None,
+    level_after: int | None = None,
 ) -> None:
     mode = _normalize_auto_delivery_mode(mode, "channel")
     if mode == "off":
         return
 
+    target_user_id = int(getattr(user, "id", 0) or 0) if user is not None else None
+    summary = str(text or "")[:500]
+
     if mode == "dm" and user is not None:
         try:
             await user.send(text)
+            await _safe_add_activity_log(
+                bot,
+                getattr(guild, "id", None),
+                target_user_id,
+                action_type,
+                delivery_mode="dm",
+                xp_delta=xp_delta,
+                level_before=level_before,
+                level_after=level_after,
+                summary=summary,
+            )
             return
         except Exception:
             return
@@ -225,8 +342,21 @@ async def _send_auto_notice(
         return
     try:
         await ch.send(text)
+        await _safe_add_activity_log(
+            bot,
+            getattr(guild, "id", None),
+            target_user_id,
+            action_type,
+            delivery_mode="channel",
+            target_channel_id=getattr(ch, "id", None),
+            xp_delta=xp_delta,
+            level_before=level_before,
+            level_after=level_after,
+            summary=summary,
+        )
     except Exception:
         return
+
 
 
 class LeaderboardView(discord.ui.View):
@@ -421,6 +551,8 @@ class LevelingCog(commands.Cog):
                 member,
                 mode=str(settings.get("voice_xp_delivery_mode") or ("dm" if bool(settings.get("voice_dm_summary_enabled", True)) else "off")),
                 text=f"🎧 {member.mention}\n이번 통화로 +{delta}XP를 얻었어요. (인정 {eligible_mins}분)",
+                action_type="voice_xp",
+                xp_delta=delta,
             )
             after_lv = xp_to_level(xp)
             if after_lv != before_lv:
@@ -437,6 +569,9 @@ class LevelingCog(commands.Cog):
                     member,
                     mode=str(settings.get("levelup_delivery_mode") or "channel"),
                     text=f"🎙️ {member.mention} 레벨 업! Lv.{before_lv} → Lv.{after_lv}{extra}",
+                    action_type="levelup",
+                    level_before=before_lv,
+                    level_after=after_lv,
                 )
             return
 
@@ -550,6 +685,11 @@ class LevelingCog(commands.Cog):
                 interaction,
                 mode=str(settings.get("checkin_delivery_mode") or "ephemeral"),
                 content=msg,
+                action_type="checkin",
+                log_user_id=interaction.user.id,
+                xp_delta=delta,
+                level_before=before_lv,
+                level_after=after_lv,
             )
         except Exception:
             log.exception("checkin command failed guild=%s user=%s", getattr(interaction.guild, 'id', None), getattr(interaction.user, 'id', None))
@@ -600,6 +740,8 @@ class LevelingCog(commands.Cog):
             interaction,
             mode=str(settings.get("profile_delivery_mode") or "ephemeral"),
             content=f"👤 {target.mention}\nXP: {xp}\n레벨: Lv.{lvl}\n{rank_line}\n출석: {c}회\n연속 출석: {streak}일",
+            action_type="profile",
+            log_user_id=target.id,
         )
 
 
@@ -625,6 +767,8 @@ class LevelingCog(commands.Cog):
             mode=str(settings.get("leaderboard_delivery_mode") or "ephemeral"),
             embed=embed,
             view=view,
+            action_type="leaderboard",
+            log_user_id=interaction.user.id,
         )
 
 async def setup(bot: commands.Bot):

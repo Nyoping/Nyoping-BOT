@@ -8,7 +8,7 @@ import io
 import json
 import uuid
 import logging
-from typing import Any
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlencode
 
 import asyncpg
@@ -489,8 +489,176 @@ async def _channel_name(pool: asyncpg.Pool, guild_id: int, channel_id: int) -> s
 
     return ""
 
+
 def _discord_bot_token() -> str:
     return str(os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
+
+PERM_VIEW_CHANNEL = 1 << 10
+PERM_SEND_MESSAGES = 1 << 11
+PERM_ADD_REACTIONS = 1 << 6
+PERM_ATTACH_FILES = 1 << 15
+PERM_EMBED_LINKS = 1 << 14
+PERM_MANAGE_ROLES = 1 << 28
+PERM_ADMINISTRATOR = 1 << 3
+
+def _perm_names(masks: list[int]) -> list[str]:
+    labels = {
+        PERM_VIEW_CHANNEL: "채널 보기",
+        PERM_SEND_MESSAGES: "메시지 보내기",
+        PERM_ATTACH_FILES: "파일 첨부",
+        PERM_EMBED_LINKS: "임베드 링크",
+        PERM_ADD_REACTIONS: "반응 추가",
+        PERM_MANAGE_ROLES: "역할 관리",
+    }
+    return [labels.get(int(m), str(m)) for m in masks]
+
+def _normalize_flash_kind(value: str | None, default: str = "success") -> str:
+    allowed = {"success", "error", "warning"}
+    v = str(value or "").strip().lower()
+    return v if v in allowed else default
+
+def _truncate_text(text: str, limit: int = 120) -> str:
+    t = str(text or "").strip()
+    if len(t) <= limit:
+        return t
+    return t[: max(0, limit - 1)] + "…"
+
+def _format_kst_dt(dt: Any) -> str:
+    if dt is None:
+        return "-"
+    try:
+        if isinstance(dt, datetime):
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+            return dt.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+    try:
+        return str(dt)
+    except Exception:
+        return "-"
+
+def _discord_api_get(path: str, *, token: str, timeout: int = 10) -> Any:
+    resp = requests.get(
+        f"https://discord.com/api/v10{path}",
+        headers={"Authorization": f"Bot {token}"},
+        timeout=timeout,
+    )
+    if not (200 <= resp.status_code < 300):
+        raise RuntimeError(f"Discord API {path} failed: HTTP {resp.status_code}")
+    return resp.json()
+
+def _channel_effective_permissions(base_perms: int, member_role_ids: list[int], user_id: int, channel: Mapping[str, Any]) -> int:
+    perms = int(base_perms)
+    if perms & PERM_ADMINISTRATOR:
+        return perms
+
+    overwrites = list(channel.get("permission_overwrites") or [])
+    everyone_deny = 0
+    everyone_allow = 0
+    role_deny = 0
+    role_allow = 0
+    member_deny = 0
+    member_allow = 0
+
+    for ow in overwrites:
+        try:
+            oid = int(ow.get("id") or 0)
+            typ = int(ow.get("type") or 0)
+            allow = int(str(ow.get("allow") or "0"))
+            deny = int(str(ow.get("deny") or "0"))
+        except Exception:
+            continue
+
+        if typ == 0 and oid == int(channel.get("guild_id") or 0):
+            everyone_deny |= deny
+            everyone_allow |= allow
+        elif typ == 0 and oid in member_role_ids:
+            role_deny |= deny
+            role_allow |= allow
+        elif typ == 1 and oid == int(user_id):
+            member_deny |= deny
+            member_allow |= allow
+
+    perms &= ~everyone_deny
+    perms |= everyone_allow
+    perms &= ~role_deny
+    perms |= role_allow
+    perms &= ~member_deny
+    perms |= member_allow
+    return perms
+
+def _compute_permission_report(
+    guild_id: int,
+    settings: Mapping[str, Any] | None,
+    channel_name_map: Mapping[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    settings = settings or {}
+    token = _discord_bot_token()
+    if not token or int(guild_id or 0) <= 0:
+        return [{"status": "warning", "feature": "권한 점검", "channel_name": "-", "channel_id": 0, "missing": [], "note": "DISCORD_BOT_TOKEN 이 없어서 채널 권한 점검을 생략했어요."}]
+
+    checks: list[tuple[str, int, list[int], str]] = []
+    notify_cid = int(settings.get("notify_channel_id") or 0)
+    if notify_cid > 0:
+        checks.append(("공개 알림 채널", notify_cid, [PERM_VIEW_CHANNEL, PERM_SEND_MESSAGES, PERM_EMBED_LINKS], "공개 결과, 자동 알림"))
+    if bool(settings.get("welcome_enabled")) and int(settings.get("welcome_channel_id") or 0) > 0:
+        req = [PERM_VIEW_CHANNEL, PERM_SEND_MESSAGES]
+        if bool(settings.get("welcome_image_enabled")):
+            req.append(PERM_ATTACH_FILES)
+        checks.append(("환영 채널", int(settings.get("welcome_channel_id") or 0), req, "자동 인사 전송"))
+    if bool(settings.get("goodbye_enabled")) and int(settings.get("goodbye_channel_id") or 0) > 0:
+        checks.append(("퇴장 채널", int(settings.get("goodbye_channel_id") or 0), [PERM_VIEW_CHANNEL, PERM_SEND_MESSAGES], "퇴장 메시지 전송"))
+
+    if not checks:
+        return [{"status": "warning", "feature": "권한 점검", "channel_name": "-", "channel_id": 0, "missing": [], "note": "점검할 전송 채널 설정이 아직 없어요."}]
+
+    try:
+        me = _discord_api_get("/users/@me", token=token)
+        bot_id = int(me.get("id") or 0)
+        guild_roles = _discord_api_get(f"/guilds/{int(guild_id)}/roles", token=token)
+        guild_member = _discord_api_get(f"/guilds/{int(guild_id)}/members/{bot_id}", token=token)
+        guild_channels = _discord_api_get(f"/guilds/{int(guild_id)}/channels", token=token)
+    except Exception as e:
+        return [{"status": "warning", "feature": "권한 점검", "channel_name": "-", "channel_id": 0, "missing": [], "note": f"Discord에서 권한 정보를 읽지 못했어요: {e}"}]
+
+    role_perm_map = {int(r.get("id") or 0): int(str(r.get("permissions") or "0")) for r in guild_roles or []}
+    member_role_ids = [int(guild_id)] + [int(rid) for rid in (guild_member.get("roles") or [])]
+    base_perms = 0
+    for rid in member_role_ids:
+        base_perms |= int(role_perm_map.get(int(rid), 0))
+
+    api_channel_map = {int(ch.get("id") or 0): ch for ch in (guild_channels or [])}
+    name_map = {int(k): str(v) for k, v in (channel_name_map or {}).items()}
+    rows: list[dict[str, Any]] = []
+
+    for feature, cid, req_masks, note in checks:
+        ch = api_channel_map.get(int(cid))
+        ch_name = name_map.get(int(cid)) or (str(ch.get("name") or "").strip() if ch else "")
+        if ch is None:
+            rows.append({
+                "status": "error",
+                "feature": feature,
+                "channel_name": ch_name or f"채널 {cid}",
+                "channel_id": int(cid),
+                "missing": [],
+                "note": "설정된 채널을 Discord에서 찾지 못했어요.",
+            })
+            continue
+        ch = dict(ch)
+        ch["guild_id"] = int(guild_id)
+        perms = _channel_effective_permissions(base_perms, member_role_ids, int(bot_id), ch)
+        missing_masks = [m for m in req_masks if not (perms & int(m))]
+        rows.append({
+            "status": "ok" if not missing_masks else "error",
+            "feature": feature,
+            "channel_name": ch_name or f"채널 {cid}",
+            "channel_id": int(cid),
+            "missing": _perm_names(missing_masks),
+            "note": note if not missing_masks else f"필수 권한 누락: {', '.join(_perm_names(missing_masks))}",
+        })
+
+    return rows
 
 
 # ---- DB bootstrap (compatible with bot schema) ----
@@ -516,6 +684,23 @@ CREATE TABLE IF NOT EXISTS voice_xp_daily (
   xp INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (guild_id, user_id, ymd)
 );
+
+CREATE TABLE IF NOT EXISTS bot_activity_logs (
+  id BIGSERIAL PRIMARY KEY,
+  guild_id BIGINT NOT NULL,
+  user_id BIGINT NULL,
+  action_type TEXT NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT '',
+  target_channel_id BIGINT NULL,
+  xp_delta INTEGER NOT NULL DEFAULT 0,
+  level_before INTEGER NULL,
+  level_after INTEGER NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_activity_logs_guild_created
+  ON bot_activity_logs (guild_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS user_stats (
   guild_id BIGINT NOT NULL,
@@ -578,6 +763,21 @@ MIGRATIONS_SQL = [
     "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_amount INTEGER NOT NULL DEFAULT 2;",
     "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_daily_cap INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_block_delay_min INTEGER NOT NULL DEFAULT 1;",
+    # activity logs
+    """CREATE TABLE IF NOT EXISTS bot_activity_logs (
+        id BIGSERIAL PRIMARY KEY,
+        guild_id BIGINT NOT NULL,
+        user_id BIGINT NULL,
+        action_type TEXT NOT NULL,
+        delivery_mode TEXT NOT NULL DEFAULT '',
+        target_channel_id BIGINT NULL,
+        xp_delta INTEGER NOT NULL DEFAULT 0,
+        level_before INTEGER NULL,
+        level_after INTEGER NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );""",
+    "CREATE INDEX IF NOT EXISTS idx_bot_activity_logs_guild_created ON bot_activity_logs (guild_id, created_at DESC);",
     # streak table
     """CREATE TABLE IF NOT EXISTS checkin_streaks (
         guild_id BIGINT NOT NULL,
@@ -933,7 +1133,7 @@ def _is_missing_db_schema_error(exc: Exception) -> bool:
     needles = [
         "undefinedcolumn", "undefinedtable", "does not exist", "column", "relation",
         "in_guild", "avatar_url", "guild_channels_cache", "dashboard_media", "level_role_sets",
-        "reaction_role_rules", "role_sync_queue"
+        "reaction_role_rules", "role_sync_queue", "bot_activity_logs"
     ]
     return any(n in msg for n in needles)
 
@@ -1025,7 +1225,7 @@ async def admin_login(request: Request, password: str = Form(...)):
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request, guild_id: str | None = None, msg: str | None = None, rank_page: int = 1):
+async def admin_page(request: Request, guild_id: str | None = None, msg: str | None = None, kind: str | None = None, saved_at: str | None = None, rank_page: int = 1):
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
 
@@ -1040,6 +1240,8 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
     reaction_blocks = []
     reaction_role_rules = []
     rules = []
+    permission_report = []
+    activity_logs = []
 
     # ranking
     rank_rows = []
@@ -1105,6 +1307,55 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
     role_name_map = {int(r["role_id"]): str(r["role_name"]) for r in roles}
     channel_name_map = {int(c["channel_id"]): str(c["channel_name"]) for c in channels}
     text_channels = _textish_channels(channels)
+    if gid:
+        try:
+            permission_report = _compute_permission_report(gid, settings or {}, channel_name_map)
+        except Exception as e:
+            permission_report = [{
+                "status": "warning",
+                "feature": "권한 점검",
+                "channel_name": "-",
+                "channel_id": 0,
+                "missing": [],
+                "note": f"권한 점검 중 오류가 발생했어요: {e}",
+            }]
+
+        raw_logs = await _fetch_optional(
+            pool,
+            """
+            SELECT l.id, l.guild_id, l.user_id, l.action_type, l.delivery_mode, l.target_channel_id,
+                   l.xp_delta, l.level_before, l.level_after, l.summary, l.created_at,
+                   COALESCE(m.display_name, m.nick, m.global_name, m.username, l.user_id::TEXT) AS user_name
+            FROM bot_activity_logs l
+            LEFT JOIN guild_members_cache m
+              ON m.guild_id=l.guild_id AND m.user_id=l.user_id
+            WHERE l.guild_id=$1
+            ORDER BY l.created_at DESC, l.id DESC
+            LIMIT 80
+            """,
+            gid,
+        )
+        action_labels = {
+            "checkin": "출석",
+            "profile": "프로필",
+            "leaderboard": "랭킹",
+            "voice_xp": "통화 XP",
+            "levelup": "레벨업",
+        }
+        delivery_labels = {"ephemeral": "본인만 보기", "dm": "DM", "channel": "공개 채널", "off": "끄기"}
+        for row in raw_logs:
+            item = dict(row)
+            item["action_label"] = action_labels.get(str(item.get("action_type") or ""), str(item.get("action_type") or "기타"))
+            item["delivery_label"] = delivery_labels.get(str(item.get("delivery_mode") or ""), str(item.get("delivery_mode") or "-"))
+            item["user_label"] = str(item.get("user_name") or item.get("user_id") or "-")
+            item["summary_short"] = _truncate_text(str(item.get("summary") or ""), 110)
+            item["created_at_text"] = _format_kst_dt(item.get("created_at"))
+            try:
+                tcid = int(item.get("target_channel_id") or 0)
+            except Exception:
+                tcid = 0
+            item["target_channel_name"] = channel_name_map.get(tcid, f"채널 {tcid}") if tcid > 0 else ""
+            activity_logs.append(item)
 
     # date suggestions (last 90 days)
     recent_dates = []
@@ -1155,6 +1406,10 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "pending_role_sync": pending_role_sync,
             "recent_dates": recent_dates,
             "msg": msg,
+            "flash_kind": _normalize_flash_kind(kind, "success") if msg else "",
+            "saved_at": saved_at or "",
+            "permission_report": permission_report,
+            "activity_logs": activity_logs,
         },
     )
 
@@ -1327,10 +1582,16 @@ def _admin_redirect_url(
     pane: str | None = None,
     group: str | None = None,
     rank_page: int | None = None,
+    kind: str | None = None,
+    saved_at: str | None = None,
 ) -> str:
     params: dict[str, Any] = {"guild_id": int(guild_id)}
     if msg:
         params["msg"] = str(msg)
+    if kind:
+        params["kind"] = _normalize_flash_kind(kind)
+    if saved_at:
+        params["saved_at"] = str(saved_at)
     if pane:
         params["pane"] = _normalize_admin_pane(pane)
     if group and params.get("pane") in {"levelsettings", "autogreet", "channels"}:
@@ -1412,9 +1673,10 @@ welcome_text3_box_width: int = Form(500),
     if not _require_admin(request):
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
-    await _update_settings(
-        pool,
-        int(guild_id),
+    try:
+        await _update_settings(
+            pool,
+            int(guild_id),
         checkin_xp=int(checkin_xp),
         checkin_limit_enabled=(checkin_limit_enabled == "on"),
         message_xp=int(message_xp),
@@ -1478,8 +1740,32 @@ welcome_text3_box_width=int(welcome_text3_box_width or 500),
         voice_afk_disconnect_delay_sec=int(voice_afk_disconnect_delay_sec or 60),
         leaderboard_channel_id=int(leaderboard_channel_id or 0),
         voice_dm_summary_enabled=(_normalize_auto_delivery_mode(voice_xp_delivery_mode, "dm") != "off"),
+        )
+    except Exception as e:
+        log.exception("save settings failed guild=%s", guild_id)
+        return RedirectResponse(
+            url=_admin_redirect_url(
+                guild_id,
+                f"설정 저장 실패: {e}",
+                pane=return_pane,
+                group=return_group,
+                kind="error",
+            ),
+            status_code=302,
+        )
+
+    saved_at_text = datetime.now(tz=KST).strftime("%Y-%m-%d %H:%M:%S")
+    return RedirectResponse(
+        url=_admin_redirect_url(
+            guild_id,
+            "설정 저장 완료",
+            pane=return_pane,
+            group=return_group,
+            kind="success",
+            saved_at=saved_at_text,
+        ),
+        status_code=302,
     )
-    return RedirectResponse(url=_admin_redirect_url(guild_id, "설정 저장 완료", pane=return_pane, group=return_group), status_code=302)
 
 async def _resolve_target_user_ids(pool: asyncpg.Pool, guild_id: int, target_type: str, user_id: str, role_id: str) -> list[int]:
     if target_type == "role":
@@ -1510,13 +1796,13 @@ async def quick_reset_checkin(
     ymd = ymd.strip() or kst_today_ymd()
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
     if not user_ids:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "대상 유저가 없어요", pane=return_pane, group=return_group), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "대상 유저가 없어요", pane=return_pane, group=return_group, kind="error"), status_code=302)
 
     await pool.execute(
         "DELETE FROM checkins WHERE guild_id=$1 AND ymd=$2 AND user_id = ANY($3::BIGINT[])",
         int(guild_id), ymd, user_ids
     )
-    return RedirectResponse(url=_admin_redirect_url(guild_id, f"출석 초기화 완료({len(user_ids)}명)", pane=return_pane, group=return_group), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"출석 초기화 완료({len(user_ids)}명)", pane=return_pane, group=return_group, kind="success"), status_code=302)
 
 @app.post("/admin/quick-set-level")
 async def quick_set_level(
@@ -1533,7 +1819,7 @@ async def quick_set_level(
     pool = await _ensure_pool(app)
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
     if not user_ids:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "대상 유저가 없어요", pane=return_pane, group=return_group), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "대상 유저가 없어요", pane=return_pane, group=return_group, kind="error"), status_code=302)
 
     xp = max(0, int(level)) * 100
 
@@ -1553,7 +1839,7 @@ async def quick_set_level(
         int(guild_id), user_ids
     )
 
-    return RedirectResponse(url=_admin_redirect_url(guild_id, f"레벨 적용 완료({len(user_ids)}명) - 역할동기화 대기", pane=return_pane, group=return_group), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"레벨 적용 완료({len(user_ids)}명) - 역할동기화 대기", pane=return_pane, group=return_group, kind="success"), status_code=302)
 
 @app.post("/admin/rules-upsert")
 async def rules_upsert(
@@ -1570,7 +1856,7 @@ async def rules_upsert(
     add_ids = _parse_ids(add_role_ids)
     rem_ids = _parse_ids(remove_role_ids)
     if not add_ids and not rem_ids:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "추가/제거 역할 중 하나는 필수", pane=return_pane, group=return_group), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "추가/제거 역할 중 하나는 필수", pane=return_pane, group=return_group, kind="error"), status_code=302)
 
     await pool.execute(
         """INSERT INTO level_role_sets (guild_id, level, add_role_ids, remove_role_ids)
@@ -1580,7 +1866,7 @@ async def rules_upsert(
     )
 
     queued = await _enqueue_all_members_role_sync(pool, int(guild_id))
-    return RedirectResponse(url=_admin_redirect_url(guild_id, f"규칙 저장 완료(역할동기화 큐 {queued}건)", pane=return_pane, group=return_group), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"규칙 저장 완료(역할동기화 큐 {queued}건)", pane=return_pane, group=return_group, kind="success"), status_code=302)
 
 @app.post("/admin/rules-delete")
 async def rules_delete(request: Request, guild_id: int = Form(...), level: int = Form(...)):
@@ -1589,7 +1875,7 @@ async def rules_delete(request: Request, guild_id: int = Form(...), level: int =
     pool = await _ensure_pool(app)
     await pool.execute("DELETE FROM level_role_sets WHERE guild_id=$1 AND level=$2", int(guild_id), int(level))
     queued = await _enqueue_all_members_role_sync(pool, int(guild_id))
-    return RedirectResponse(url=_admin_redirect_url(guild_id, f"규칙 삭제 완료(역할동기화 큐 {queued}건)", pane=return_pane, group=return_group), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"규칙 삭제 완료(역할동기화 큐 {queued}건)", pane=return_pane, group=return_group, kind="success"), status_code=302)
 
 @app.post("/admin/reaction-block-add")
 async def reaction_block_add(
@@ -1605,14 +1891,14 @@ async def reaction_block_add(
     # parse
     mids = _parse_ids(message)
     if not mids:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "메시지 ID(또는 링크)를 입력하세요", pane=return_pane), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "메시지 ID(또는 링크)를 입력하세요", pane=return_pane, kind="error"), status_code=302)
     msg_id = int(mids[0])
     if not str(channel_id).isdigit():
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "채널을 선택하세요", pane=return_pane), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "채널을 선택하세요", pane=return_pane, kind="error"), status_code=302)
     cid = int(channel_id)
     rids = _parse_ids(blocked_role_ids)
     if not rids:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "차단할 역할을 선택하세요", pane=return_pane), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "차단할 역할을 선택하세요", pane=return_pane, kind="error"), status_code=302)
 
     await pool.execute(
         """INSERT INTO reaction_blocks (guild_id, channel_id, message_id, blocked_role_id, updated_at)
@@ -1621,7 +1907,7 @@ async def reaction_block_add(
            DO UPDATE SET channel_id=EXCLUDED.channel_id, updated_at=NOW()""",
         int(guild_id), int(cid), int(msg_id), rids
     )
-    return RedirectResponse(url=_admin_redirect_url(guild_id, f"반응차단 저장 완료({len(rids)}개)", pane=return_pane), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, f"반응차단 저장 완료({len(rids)}개)", pane=return_pane, kind="success"), status_code=302)
 
 @app.post("/admin/reaction-block-delete")
 async def reaction_block_delete(
@@ -1637,7 +1923,7 @@ async def reaction_block_delete(
         "DELETE FROM reaction_blocks WHERE guild_id=$1 AND message_id=$2 AND blocked_role_id=$3",
         int(guild_id), int(message_id), int(role_id)
     )
-    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응차단 삭제 완료", pane=return_pane), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응차단 삭제 완료", pane=return_pane, kind="success"), status_code=302)
 
 
 
@@ -1656,14 +1942,14 @@ async def reaction_role_upsert(
     pool = await _ensure_pool(app)
     mids = _parse_ids(message)
     if not mids:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "메시지 ID(또는 링크)를 입력하세요", pane=return_pane), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "메시지 ID(또는 링크)를 입력하세요", pane=return_pane, kind="error"), status_code=302)
     msg_id = int(mids[0])
     if not str(channel_id).isdigit():
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "채널을 선택하세요", pane=return_pane), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "채널을 선택하세요", pane=return_pane, kind="error"), status_code=302)
     cid = int(channel_id)
     ek = _parse_emoji_key(emoji)
     if not ek:
-        return RedirectResponse(url=_admin_redirect_url(guild_id, "이모지를 입력하세요", pane=return_pane), status_code=302)
+        return RedirectResponse(url=_admin_redirect_url(guild_id, "이모지를 입력하세요", pane=return_pane, kind="error"), status_code=302)
 
     add_ids = _parse_ids(add_role_ids)
     rem_ids = _parse_ids(remove_role_ids)
@@ -1678,7 +1964,7 @@ async def reaction_role_upsert(
         int(guild_id), int(cid), int(msg_id), str(ek), add_ids, rem_ids
     )
 
-    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응역할 저장 완료", pane=return_pane), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응역할 저장 완료", pane=return_pane, kind="success"), status_code=302)
 
 
 @app.post("/admin/reaction-role-delete")
@@ -1695,7 +1981,7 @@ async def reaction_role_delete(
         "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
         int(guild_id), int(message_id), str(emoji_key)
     )
-    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응역할 삭제 완료", pane=return_pane), status_code=302)
+    return RedirectResponse(url=_admin_redirect_url(guild_id, "반응역할 삭제 완료", pane=return_pane, kind="success"), status_code=302)
 
 # ---- APIs for UI (DB cache only, no Discord REST) ----
 @app.get("/admin/api/roles_search")
