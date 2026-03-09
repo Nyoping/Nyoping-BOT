@@ -291,7 +291,7 @@ class LevelingCog(commands.Cog):
                 member.guild,
                 member,
                 mode=str(settings.get("voice_xp_delivery_mode") or ("dm" if bool(settings.get("voice_dm_summary_enabled", True)) else "off")),
-                text=f"🎧 {member.mention} 이번 통화로 +{delta}XP를 얻었어요. ({mins}분)",
+                text=f"🎧 {member.mention}\n이번 통화로 +{delta}XP를 얻었어요. ({mins}분)",
             )
             after_lv = xp_to_level(xp)
             if after_lv != before_lv:
@@ -407,7 +407,7 @@ class LevelingCog(commands.Cog):
                 except Exception:
                     log.exception("checkin notify failed guild=%s user=%s", interaction.guild.id, interaction.user.id)
 
-            msg = f"✅ 출석 완료! +{delta}XP"
+            msg = f"✅ {interaction.user.mention} 출석 완료! +{delta}XP"
             if bonus > 0:
                 msg += f" (연속 {streak}일 +{bonus}XP 보너스)"
                 if not limit_enabled and bonus_per_day <= 0:
