@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ app_name }} {{ page_title }}</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;margin:0;background:#0b1220;color:#e5e7eb;line-height:1.7}
+    .wrap{max-width:920px;margin:0 auto;padding:28px 20px 40px}
+    .card{background:#111a2e;border:1px solid #1f2a44;border-radius:16px;padding:22px}
+    h1,h2{margin:0 0 14px}
+    h1{font-size:30px}
+    h2{font-size:20px;margin-top:26px}
+    p,li{color:#d1d5db}
+    .muted{color:#9ca3af;font-size:14px}
+    .badge{display:inline-block;padding:6px 10px;border-radius:999px;background:#172554;color:#bfdbfe;font-size:13px;margin-bottom:12px}
+    a{color:#93c5fd;text-decoration:none}
+    ul{padding-left:20px}
+    .topbar{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+    .back{display:inline-flex;align-items:center;gap:6px;padding:9px 12px;border-radius:10px;background:#111827;border:1px solid #24324f}
+    .grid{display:grid;grid-template-columns:1fr;gap:16px;margin-top:22px}
+    .subcard{background:#0b1220;border:1px solid #23314d;border-radius:14px;padding:16px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <a class="back" href="/">← 대시보드로</a>
+      <div class="muted">{{ app_name }} 법적 안내</div>
+    </div>
+
+    <div class="card">
+      <div class="badge">{{ page_title }}</div>
+      <h1>{{ app_name }} 이용약관</h1>
+      <p class="muted">최종 수정일: {{ effective_date }}</p>
+
+      <h2>1. 목적</h2>
+      <p>이 약관은 {{ app_name }} 사용과 관련된 기본 조건과 책임 범위를 정합니다.</p>
+
+      <h2>2. 서비스 내용</h2>
+      <p>{{ app_name }}은(는) 디스코드 서버에서 레벨, 출석, 통화 경험치, 자동 인사, 채널 제어, 반응 및 기타 관리 기능을 제공합니다.</p>
+
+      <h2>3. 이용자의 의무</h2>
+      <ul>
+        <li>이용자는 Discord의 이용약관, 커뮤니티 가이드라인 및 관련 정책을 위반하는 방식으로 봇을 사용해서는 안 됩니다.</li>
+        <li>서버 설정과 알림 사용은 각 서버 관리자 책임 아래에서 이루어져야 합니다.</li>
+      </ul>
+
+      <h2>4. 서비스 변경 및 중단</h2>
+      <p>{{ app_name }}의 기능은 예고 없이 변경, 제한 또는 중단될 수 있습니다.</p>
+
+      <h2>5. 책임 제한</h2>
+      <p>{{ app_name }}은(는) 가능한 안정적으로 운영되지만, 장애, 기능 오작동, 데이터 손실 등에 대해 법이 허용하는 범위 내에서 책임이 제한될 수 있습니다.</p>
+
+      <h2>6. 데이터 처리</h2>
+      <p>서비스 제공을 위해 필요한 최소한의 데이터를 처리하며, 자세한 내용은 개인정보처리방침을 따릅니다.</p>
+
+      <h2>7. 문의 및 개발자 정보</h2>
+      <div class="grid">
+        <div class="subcard">
+          <strong>개발자</strong>
+          <p>{{ developer_name }}</p>
+        </div>
+        <div class="subcard">
+          <strong>문의 이메일</strong>
+          <p>{{ contact_email }}</p>
+        </div>
+        <div class="subcard">
+          <strong>지원 서버</strong>
+          {% if support_server_url %}
+          <p><a href="{{ support_server_url }}" target="_blank" rel="noopener noreferrer">{{ support_server_url }}</a></p>
+          {% else %}
+          <p>지원 서버 링크를 아직 등록하지 않았습니다.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

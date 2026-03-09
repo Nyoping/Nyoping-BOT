@@ -91,6 +91,35 @@ def _parse_bigint_list_text(text: str | None) -> list[int]:
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
+def _developer_name() -> str:
+    return _env("DEVELOPER_NAME", "뇨핑봇 개발자")
+
+
+def _legal_contact_email() -> str:
+    return _env("LEGAL_CONTACT_EMAIL", "you@example.com")
+
+
+def _support_server_url() -> str:
+    return _env("SUPPORT_SERVER_URL", "")
+
+
+def _legal_effective_date() -> str:
+    return datetime.now(KST).strftime("%Y-%m-%d")
+
+
+def _legal_base_context(request: Request, *, page_title: str, page_key: str) -> dict[str, Any]:
+    return {
+        "request": request,
+        "page_title": page_title,
+        "page_key": page_key,
+        "app_name": "뇨핑봇",
+        "developer_name": _developer_name(),
+        "contact_email": _legal_contact_email(),
+        "support_server_url": _support_server_url(),
+        "effective_date": _legal_effective_date(),
+    }
+
+
 def _safe_image_bytes(raw: bytes, *, max_bytes: int = 8 * 1024 * 1024) -> bytes:
     if not raw:
         raise ValueError("이미지 데이터가 비어 있어요.")
@@ -949,7 +978,24 @@ async def shutdown():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request)})
+    return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request), "developer_name": _developer_name()})
+
+
+@app.get("/legal/privacy", response_class=HTMLResponse)
+async def legal_privacy(request: Request):
+    return TEMPLATES.TemplateResponse(
+        "privacy.html",
+        _legal_base_context(request, page_title="개인정보처리방침", page_key="privacy"),
+    )
+
+
+@app.get("/legal/terms", response_class=HTMLResponse)
+async def legal_terms(request: Request):
+    return TEMPLATES.TemplateResponse(
+        "terms.html",
+        _legal_base_context(request, page_title="이용약관", page_key="terms"),
+    )
+
 
 @app.post("/admin-login")
 async def admin_login(request: Request, password: str = Form(...)):
@@ -1076,6 +1122,7 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "channels": channels,
             "text_channels": text_channels,
             "guild_name": _safe_selected_guild_name(guilds, gid),
+            "developer_name": _developer_name(),
             "font_options": FONT_OPTION_LABELS,
             "reaction_blocks": reaction_blocks,
             "reaction_role_rules": display_reaction_role_rules,
