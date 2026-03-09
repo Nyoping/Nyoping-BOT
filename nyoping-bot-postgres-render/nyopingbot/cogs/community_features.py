@@ -22,14 +22,20 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 BUNDLED_FONTS_DIR = BASE_DIR / "fonts"
 BUNDLED_SANS_FONTS = [
     str(BUNDLED_FONTS_DIR / "NotoSansKR-Regular.ttf"),
+    str(BUNDLED_FONTS_DIR / "NotoSansKR-Medium.ttf"),
     str(BUNDLED_FONTS_DIR / "NotoSansKR-Bold.ttf"),
     str(BUNDLED_FONTS_DIR / "NanumGothic.ttf"),
+    str(BUNDLED_FONTS_DIR / "NanumBarunGothic.ttf"),
+    str(BUNDLED_FONTS_DIR / "NanumSquareNeo-bRg.ttf"),
     str(BUNDLED_FONTS_DIR / "MaruBuri-Regular.ttf"),
 ]
 BUNDLED_SERIF_FONTS = [
+    str(BUNDLED_FONTS_DIR / "NanumMyeongjo.ttf"),
     str(BUNDLED_FONTS_DIR / "MaruBuri-Regular.ttf"),
+    str(BUNDLED_FONTS_DIR / "MaruBuri-Bold.ttf"),
 ]
 BUNDLED_MONO_FONTS = [
+    str(BUNDLED_FONTS_DIR / "D2CodingLigature.ttf"),
     str(BUNDLED_FONTS_DIR / "NotoSansKR-Regular.ttf"),
 ]
 

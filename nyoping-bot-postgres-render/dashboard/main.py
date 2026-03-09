@@ -32,26 +32,40 @@ log = logging.getLogger(__name__)
 BUNDLED_FONTS_DIR = (Path(__file__).resolve().parents[1] / "fonts")
 BUNDLED_SANS_FONTS = [
     str(BUNDLED_FONTS_DIR / "NotoSansKR-Regular.ttf"),
+    str(BUNDLED_FONTS_DIR / "NotoSansKR-Medium.ttf"),
     str(BUNDLED_FONTS_DIR / "NotoSansKR-Bold.ttf"),
     str(BUNDLED_FONTS_DIR / "NanumGothic.ttf"),
+    str(BUNDLED_FONTS_DIR / "NanumBarunGothic.ttf"),
+    str(BUNDLED_FONTS_DIR / "NanumSquareNeo-bRg.ttf"),
     str(BUNDLED_FONTS_DIR / "MaruBuri-Regular.ttf"),
 ]
 BUNDLED_SERIF_FONTS = [
+    str(BUNDLED_FONTS_DIR / "NanumMyeongjo.ttf"),
     str(BUNDLED_FONTS_DIR / "MaruBuri-Regular.ttf"),
+    str(BUNDLED_FONTS_DIR / "MaruBuri-Bold.ttf"),
 ]
 BUNDLED_MONO_FONTS = [
+    str(BUNDLED_FONTS_DIR / "D2CodingLigature.ttf"),
     str(BUNDLED_FONTS_DIR / "NotoSansKR-Regular.ttf"),
 ]
 
 FONT_OPTION_LABELS = {
     "default": "기본 (노토 산스 KR)",
     "sans": "고딕 (노토 산스 KR)",
-    "serif": "마루부리",
-    "mono": "나눔고딕",
+    "serif": "명조 (나눔명조)",
+    "mono": "D2Coding",
     "NotoSansKR-Regular.ttf": "Noto Sans KR Regular",
+    "NotoSansKR-Medium.ttf": "Noto Sans KR Medium",
     "NotoSansKR-Bold.ttf": "Noto Sans KR Bold",
+    "NotoSansKR-Black.ttf": "Noto Sans KR Black",
     "NanumGothic.ttf": "나눔고딕",
+    "NanumBarunGothic.ttf": "나눔바른고딕",
+    "NanumMyeongjo.ttf": "나눔명조",
+    "NanumSquareNeo-bRg.ttf": "나눔스퀘어네오 Regular",
+    "NanumSquareNeo-cBd.ttf": "나눔스퀘어네오 Bold",
     "MaruBuri-Regular.ttf": "마루부리 Regular",
+    "MaruBuri-Bold.ttf": "마루부리 Bold",
+    "D2CodingLigature.ttf": "D2Coding",
 }
 
 
@@ -282,8 +296,8 @@ async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: di
     user_id = _to_int(member.get("user_id"), 0)
     for layer in _pick_text_layers_from_form(form):
         text = _replace_vars_for_preview(layer["template"], user_id=user_id, display_name=display_name, guild_name=guild_name)
-        font_name = "korean" if _contains_korean_text(text) else layer["font_name"]
-        font = _safe_font(font_name, layer["font_size"])
+        # 사용자가 고른 폰트를 우선 사용하고, 해당 폰트에 없는 글리프만 _safe_font의 fallback 체인으로 처리
+        font = _safe_font(str(layer["font_name"]), layer["font_size"])
         lines = _wrap_text_lines(draw, text, font, layer["box_width"])
         for i, line in enumerate(lines):
             bbox = draw.textbbox((0, 0), line, font=font)
