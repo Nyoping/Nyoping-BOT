@@ -216,14 +216,15 @@ def _wrap_text_lines(draw: ImageDraw.ImageDraw, text: str, font, max_width: int)
             out.append(cur)
     return out
 
-def _replace_vars_for_preview(template: str, *, user_id: int, display_name: str, guild_name: str) -> str:
+def _replace_vars_for_preview(template: str, *, user_id: int, display_name: str, guild_name: str, channel_id: int = 0) -> str:
     text = str(template or "")
     rep = {
         "[user]": str(display_name or f"유저{int(user_id)}"),
-        "[server]": guild_name,
+        "[server]": str(guild_name or ""),
         "[inviter]": "초대한사람",
         "[discord]": str(int(user_id)),
         "[reason]": "",
+        "[channel]": f"<#{int(channel_id)}>" if int(channel_id or 0) > 0 else "",
     }
     for k, v in rep.items():
         text = text.replace(k, v)
@@ -295,7 +296,7 @@ async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: di
     display_name = str(member.get("display_name") or member.get("nick") or member.get("global_name") or member.get("username") or member.get("user_id") or "유저")
     user_id = _to_int(member.get("user_id"), 0)
     for layer in _pick_text_layers_from_form(form):
-        text = _replace_vars_for_preview(layer["template"], user_id=user_id, display_name=display_name, guild_name=guild_name)
+        text = _replace_vars_for_preview(layer["template"], user_id=user_id, display_name=display_name, guild_name=guild_name, channel_id=_to_int(form.get("welcome_channel_id"), 0))
         # 사용자가 고른 폰트를 우선 사용하고, 해당 폰트에 없는 글리프만 _safe_font의 fallback 체인으로 처리
         font = _safe_font(str(layer["font_name"]), layer["font_size"])
         lines = _wrap_text_lines(draw, text, font, layer["box_width"])

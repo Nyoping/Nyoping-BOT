@@ -222,10 +222,10 @@
 </div>
 
 <label>환영 메시지 템플릿</label>
-<input name="welcome_message_template" value="{{ settings.welcome_message_template or '환영합니다 [user]!' }}">
+<textarea name="welcome_message_template" rows="4" placeholder="환영 메시지를 입력하세요">{{ settings.welcome_message_template or '환영합니다 [user]!' }}</textarea>
 <label>퇴장 메시지 템플릿</label>
-<input name="goodbye_message_template" value="{{ settings.goodbye_message_template or '[user] 님이 서버를 떠났습니다. [reason]' }}">
-<div class="small">사용 가능 변수: [user] [server] [inviter] [discord] [reason]</div>
+<textarea name="goodbye_message_template" rows="4" placeholder="퇴장 메시지를 입력하세요">{{ settings.goodbye_message_template or '[user] 님이 서버를 떠났습니다. [reason]' }}</textarea>
+<div class="small">사용 가능 변수: [user] [server] [inviter] [discord] [reason] [channel] · Enter로 줄바꿈할 수 있어요.</div>
 
 <div class="row">
   <div class="col">

@@ -143,6 +143,7 @@ def _replace_vars(
     inviter: discord.User | discord.Member | None = None,
     mode: str = "message",
     leave_reason: str | None = None,
+    channel: discord.abc.GuildChannel | None = None,
 ) -> str:
     t = str(template or "")
     display_user = ""
@@ -155,12 +156,14 @@ def _replace_vars(
     server_name = guild.name if guild else ""
     inviter_mention = inviter.mention if inviter else "알 수 없음"
     inviter_name = getattr(inviter, "display_name", None) or getattr(inviter, "name", None) or "알 수 없음"
+    channel_mention = channel.mention if channel is not None and hasattr(channel, "mention") else ""
     mapping = {
         "[user]": mention_user if mode == "message" else display_user,
         "[server]": server_name,
         "[inviter]": inviter_mention if mode == "message" else inviter_name,
         "[discord]": discord_id,
         "[reason]": str(leave_reason or ""),
+        "[channel]": channel_mention,
     }
     for k, v in mapping.items():
         t = t.replace(k, v)
