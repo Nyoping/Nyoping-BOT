@@ -141,9 +141,9 @@ def _replace_vars(
     member: discord.Member | None = None,
     guild: discord.Guild | None = None,
     inviter: discord.User | discord.Member | None = None,
+    mention_channel: discord.abc.GuildChannel | None = None,
     mode: str = "message",
     leave_reason: str | None = None,
-    channel: discord.abc.GuildChannel | None = None,
 ) -> str:
     t = str(template or "")
     display_user = ""
@@ -156,14 +156,19 @@ def _replace_vars(
     server_name = guild.name if guild else ""
     inviter_mention = inviter.mention if inviter else "알 수 없음"
     inviter_name = getattr(inviter, "display_name", None) or getattr(inviter, "name", None) or "알 수 없음"
-    channel_mention = channel.mention if channel is not None and hasattr(channel, "mention") else ""
+    mention_channel_name = getattr(mention_channel, "name", "") if mention_channel else ""
+    mention_channel_value = (
+        mention_channel.mention
+        if mention_channel is not None and mode == "message"
+        else (f"#{mention_channel_name}" if mention_channel_name else "")
+    )
     mapping = {
         "[user]": mention_user if mode == "message" else display_user,
         "[server]": server_name,
         "[inviter]": inviter_mention if mode == "message" else inviter_name,
         "[discord]": discord_id,
         "[reason]": str(leave_reason or ""),
-        "[channel]": channel_mention,
+        "[channel]": mention_channel_value,
     }
     for k, v in mapping.items():
         t = t.replace(k, v)
@@ -272,7 +277,12 @@ class CommunityFeaturesCog(commands.Cog):
             return None
 
     async def _build_welcome_image_bytes(
-        self, member: discord.Member, guild: discord.Guild, settings: dict, inviter
+        self,
+        member: discord.Member,
+        guild: discord.Guild,
+        settings: dict,
+        inviter,
+        mention_channel: discord.abc.GuildChannel | None = None,
     ) -> bytes | None:
         bg_url = str(settings.get("welcome_background_url") or "").strip()
         if not bg_url:
@@ -336,6 +346,7 @@ class CommunityFeaturesCog(commands.Cog):
                     member=member,
                     guild=guild,
                     inviter=inviter,
+                    mention_channel=mention_channel,
                     mode="image",
                 )
                 font = _safe_font(str(layer["font_name"]), int(layer["font_size"]))
@@ -389,6 +400,10 @@ class CommunityFeaturesCog(commands.Cog):
             return
 
         inviter = await self._detect_used_inviter(guild) if kind == "welcome" else None
+        mention_channel_setting_key = "welcome_message_channel_id" if kind == "welcome" else "goodbye_message_channel_id"
+        mention_channel_id = int(settings.get(mention_channel_setting_key) or 0)
+        mention_channel = await self._resolve_text_channel(guild, mention_channel_id) if mention_channel_id > 0 else None
+
         template = str(
             settings.get("welcome_message_template" if kind == "welcome" else "goodbye_message_template") or ""
         )
@@ -397,13 +412,14 @@ class CommunityFeaturesCog(commands.Cog):
             member=member,
             guild=guild,
             inviter=inviter,
+            mention_channel=mention_channel,
             mode="message",
             leave_reason=leave_reason,
         )
 
         file = None
         if kind == "welcome" and bool(settings.get("welcome_image_enabled", False)):
-            raw = await self._build_welcome_image_bytes(member, guild, settings, inviter)
+            raw = await self._build_welcome_image_bytes(member, guild, settings, inviter, mention_channel)
             if raw:
                 file = discord.File(io.BytesIO(raw), filename="welcome.png")
             else:

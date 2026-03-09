@@ -147,6 +147,16 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
         );""")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_guild_channels_cache_guild ON guild_channels_cache (guild_id);")
 
+        # welcome/goodbye message variable support
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_message_template TEXT NOT NULL DEFAULT '환영합니다 [user]!';")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_message_template TEXT NOT NULL DEFAULT '[user] 님이 서버를 떠났습니다.';")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_message_channel_id BIGINT NOT NULL DEFAULT 0;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_message_channel_id BIGINT NOT NULL DEFAULT 0;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_enabled BOOLEAN NOT NULL DEFAULT FALSE;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_channel_id BIGINT NOT NULL DEFAULT 0;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_enabled BOOLEAN NOT NULL DEFAULT FALSE;")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_channel_id BIGINT NOT NULL DEFAULT 0;")
+
 # dashboard/bot coordination: request role sync after admin bulk edits
         await conn.execute("""CREATE TABLE IF NOT EXISTS role_sync_queue (
           guild_id BIGINT NOT NULL,

@@ -216,15 +216,23 @@ def _wrap_text_lines(draw: ImageDraw.ImageDraw, text: str, font, max_width: int)
             out.append(cur)
     return out
 
-def _replace_vars_for_preview(template: str, *, user_id: int, display_name: str, guild_name: str, channel_id: int = 0) -> str:
+def _replace_vars_for_preview(
+    template: str,
+    *,
+    user_id: int,
+    display_name: str,
+    guild_name: str,
+    mention_channel_name: str = "",
+) -> str:
     text = str(template or "")
+    channel_name = str(mention_channel_name or "").strip()
     rep = {
         "[user]": str(display_name or f"유저{int(user_id)}"),
-        "[server]": str(guild_name or ""),
+        "[server]": guild_name,
         "[inviter]": "초대한사람",
         "[discord]": str(int(user_id)),
         "[reason]": "",
-        "[channel]": f"<#{int(channel_id)}>" if int(channel_id or 0) > 0 else "",
+        "[channel]": f"#{channel_name}" if channel_name else "",
     }
     for k, v in rep.items():
         text = text.replace(k, v)
@@ -260,7 +268,7 @@ def _pick_text_layers_from_form(form: dict[str, Any]) -> list[dict[str, Any]]:
         })
     return layers
 
-async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: dict[str, Any], guild_name: str) -> bytes | None:
+async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: dict[str, Any], guild_name: str, mention_channel_name: str = "") -> bytes | None:
     bg_url = str(form.get("welcome_background_url") or "").strip()
     if not bg_url:
         return None
@@ -296,7 +304,13 @@ async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: di
     display_name = str(member.get("display_name") or member.get("nick") or member.get("global_name") or member.get("username") or member.get("user_id") or "유저")
     user_id = _to_int(member.get("user_id"), 0)
     for layer in _pick_text_layers_from_form(form):
-        text = _replace_vars_for_preview(layer["template"], user_id=user_id, display_name=display_name, guild_name=guild_name, channel_id=_to_int(form.get("welcome_channel_id"), 0))
+        text = _replace_vars_for_preview(
+            layer["template"],
+            user_id=user_id,
+            display_name=display_name,
+            guild_name=guild_name,
+            mention_channel_name=mention_channel_name,
+        )
         # 사용자가 고른 폰트를 우선 사용하고, 해당 폰트에 없는 글리프만 _safe_font의 fallback 체인으로 처리
         font = _safe_font(str(layer["font_name"]), layer["font_size"])
         lines = _wrap_text_lines(draw, text, font, layer["box_width"])
@@ -344,6 +358,21 @@ async def _guild_name(pool: asyncpg.Pool, guild_id: int) -> str:
     except Exception:
         pass
     return f"서버 {guild_id}"
+
+async def _channel_name(pool: asyncpg.Pool, guild_id: int, channel_id: int) -> str:
+    if int(channel_id or 0) <= 0:
+        return ""
+    try:
+        name = await pool.fetchval(
+            "SELECT channel_name FROM guild_channels_cache WHERE guild_id=$1 AND channel_id=$2",
+            int(guild_id),
+            int(channel_id),
+        )
+        if name:
+            return str(name)
+    except Exception:
+        pass
+    return ""
 
 def _discord_bot_token() -> str:
     return str(os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
@@ -461,6 +490,8 @@ MIGRATIONS_SQL = [
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_enabled BOOLEAN NOT NULL DEFAULT FALSE;",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_message_template TEXT NOT NULL DEFAULT '환영합니다 [user]!';",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_message_template TEXT NOT NULL DEFAULT '[user] 님이 서버를 떠났습니다.';",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_message_channel_id BIGINT NOT NULL DEFAULT 0;",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS goodbye_message_channel_id BIGINT NOT NULL DEFAULT 0;",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_image_enabled BOOLEAN NOT NULL DEFAULT FALSE;",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_background_url TEXT NOT NULL DEFAULT '';",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_avatar_shape TEXT NOT NULL DEFAULT 'circle';",
@@ -1019,13 +1050,20 @@ async def test_welcome_message(request: Request):
     if member is None:
         return JSONResponse({"ok": False, "error": "member_not_found", "message": "테스트에 사용할 유저를 찾지 못했어요."}, status_code=404)
 
-    guild_name = await _guild_name(pool, guild_id)
+    raw_form_guild_name = str(form.get("guild_name") or "").strip()
+    guild_name = raw_form_guild_name or await _guild_name(pool, guild_id)
+    if guild_name in {str(guild_id), f"서버 {guild_id}"}:
+        guild_name = raw_form_guild_name or guild_name
+
+    mention_channel_id = _to_int(form.get("welcome_message_channel_id"), 0)
+    mention_channel_name = await _channel_name(pool, guild_id, mention_channel_id)
     display_name = str(member.get("display_name") or member.get("nick") or member.get("global_name") or member.get("username") or member.get("user_id") or "유저")
     content = _replace_vars_for_preview(
         str(form.get("welcome_message_template") or "환영합니다 [user]!"),
         user_id=_to_int(member.get("user_id"), 0),
         display_name=display_name,
         guild_name=guild_name,
+        mention_channel_name=mention_channel_name,
     )
     url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
     headers = {"Authorization": f"Bot {token}"}
@@ -1035,7 +1073,7 @@ async def test_welcome_message(request: Request):
         image_warning = None
         if _to_bool(form.get("welcome_image_enabled")):
             try:
-                image_bytes = await _build_test_welcome_image_bytes(pool, form, member, guild_name)
+                image_bytes = await _build_test_welcome_image_bytes(pool, form, member, guild_name, mention_channel_name)
                 if not image_bytes:
                     image_warning = "사진을 만들지 못해서 텍스트만 보냈어요."
             except Exception:
@@ -1076,9 +1114,11 @@ async def save_settings(
     welcome_enabled: str = Form("off"),
     welcome_channel_id: str = Form(""),
     welcome_message_template: str = Form("환영합니다 [user]!"),
+    welcome_message_channel_id: str = Form(""),
     goodbye_enabled: str = Form("off"),
     goodbye_channel_id: str = Form(""),
     goodbye_message_template: str = Form("[user] 님이 서버를 떠났습니다."),
+    goodbye_message_channel_id: str = Form(""),
     welcome_image_enabled: str = Form("off"),
     welcome_background_url: str = Form(""),
     welcome_avatar_shape: str = Form("circle"),
@@ -1134,9 +1174,11 @@ welcome_text3_box_width: int = Form(500),
         welcome_enabled=(welcome_enabled == "on"),
         welcome_channel_id=int(welcome_channel_id or 0),
         welcome_message_template=str(welcome_message_template or ""),
+        welcome_message_channel_id=int(welcome_message_channel_id or 0),
         goodbye_enabled=(goodbye_enabled == "on"),
         goodbye_channel_id=int(goodbye_channel_id or 0),
         goodbye_message_template=str(goodbye_message_template or ""),
+        goodbye_message_channel_id=int(goodbye_message_channel_id or 0),
         welcome_image_enabled=(welcome_image_enabled == "on"),
         welcome_background_url=str(welcome_background_url or ""),
         welcome_avatar_shape=str(welcome_avatar_shape or "circle"),
