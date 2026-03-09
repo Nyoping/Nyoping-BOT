@@ -608,7 +608,7 @@
     <div class="col">
       <label>미리보기 대상 유저 검색</label>
       <input id="welcomePreviewUserSearch" placeholder="닉네임/ID 검색 또는 클릭해서 최근 유저 보기" onfocus="openWelcomePreviewUserPicker()" oninput="searchWelcomePreviewUsers()" autocomplete="off">
-      <input type="hidden" id="welcomePreviewUserId" value="">
+      <input type="hidden" id="welcomePreviewUserId" name="welcomePreviewUserId" value="">
       <div id="welcomePreviewUserList" class="list" style="display:none;margin-top:8px"></div>
       <div class="small" id="welcomePreviewUserLabel" style="margin-top:6px">미선택 상태에서는 최근 유저를 자동으로 골라 미리보기를 보여줘요.</div>
     </div>
@@ -1774,6 +1774,373 @@ function showPane(name){
   const btn = document.querySelector(`.navbtn[data-pane-target="${currentAdminPane}"]`);
   if (btn) btn.classList.add('active');
   bindAdminForms();
+}
+
+
+
+function getWelcomeNumber(name, fallback){
+  const el = settingsInput(name);
+  const v = el ? parseInt(el.value || fallback, 10) : fallback;
+  return Number.isFinite(v) ? v : fallback;
+}
+function getWelcomeText(name, fallback=''){
+  const el = settingsInput(name);
+  return el ? String(el.value || fallback) : fallback;
+}
+function normalizeMemberDisplay(m){
+  if (!m) return '미선택';
+  return m.display_name || m.nick || m.global_name || m.username || m.user_id || '미선택';
+}
+window.previewState = window.previewState || {
+
+  member: null,
+  bgImage: null,
+  avatarImage: null,
+  drag: null,
+  dragLayerKey: null,
+  dragOffsetX: 0,
+  dragOffsetY: 0,
+};
+const previewState = window.previewState;
+function selectedChannelPreviewName(selectName){
+  const el = settingsInput(selectName);
+  if (!el) return '';
+  if (el.tagName === 'SELECT') {
+    const opt = el.options[el.selectedIndex];
+    const raw = opt ? String(opt.textContent || '') : '';
+    const name = raw.split('·')[0].trim();
+    return name ? ('#' + name) : '';
+  }
+  const raw = String(el.value || '').trim();
+  return raw ? ('<#' + raw + '>') : '';
+}
+function applyPreviewVars(text){
+  let out = String(text || '');
+  const m = previewState.member || {};
+  const rep = {
+    '[user]': normalizeMemberDisplay(m),
+    '[server]': '{{ guild_name or "" }}',
+    '[discord]': String(m.user_id || ''),
+    '[inviter]': '@inviter',
+    '[reason]': '',
+    '[channel]': selectedChannelPreviewName('welcome_message_channel_id'),
+  };
+  Object.entries(rep).forEach(([k,v]) => { out = out.split(k).join(v); });
+  return out;
+}
+function getPreviewFontFamily(fontName){
+  const f = String(fontName || 'default');
+  const map = {
+    'default': '"NotoSansKR-Regular", system-ui, sans-serif',
+    'sans': '"NotoSansKR-Regular", system-ui, sans-serif',
+    'serif': '"NanumMyeongjo", serif',
+    'mono': '"D2Coding", monospace',
+    'NotoSansKR-Regular.ttf': '"NotoSansKR-Regular", system-ui, sans-serif',
+    'NotoSansKR-Medium.ttf': '"NotoSansKR-Medium", system-ui, sans-serif',
+    'NotoSansKR-Bold.ttf': '"NotoSansKR-Bold", system-ui, sans-serif',
+    'NotoSansKR-Black.ttf': '"NotoSansKR-Bold", system-ui, sans-serif',
+    'NanumGothic.ttf': '"NanumGothic", system-ui, sans-serif',
+    'NanumBarunGothic.ttf': '"NanumBarunGothic", system-ui, sans-serif',
+    'NanumMyeongjo.ttf': '"NanumMyeongjo", serif',
+    'NanumSquareNeo-bRg.ttf': '"NanumSquareNeo", system-ui, sans-serif',
+    'NanumSquareNeo-cBd.ttf': '"NanumSquareNeoBold", system-ui, sans-serif',
+    'MaruBuri-Regular.ttf': '"MaruBuri", serif',
+    'MaruBuri-Bold.ttf': '"MaruBuriBold", serif',
+    'D2CodingLigature.ttf': '"D2Coding", monospace',
+  };
+  return map[f] || '"NotoSansKR-Regular", system-ui, sans-serif';
+}
+function getTextLayers(){
+  return [
+    {key:'welcome_text', template:getWelcomeText('welcome_text_template','[user]'), x:getWelcomeNumber('welcome_text_x',200), y:getWelcomeNumber('welcome_text_y',80), boxW:getWelcomeNumber('welcome_text_box_width',500), fontSize:getWelcomeNumber('welcome_text_font_size',40), color:getWelcomeText('welcome_text_color','#ffffff'), align:getWelcomeText('welcome_text_align','left'), fontName:getWelcomeText('welcome_text_font_name','default')},
+    {key:'welcome_text2', template:getWelcomeText('welcome_text2_template',''), x:getWelcomeNumber('welcome_text2_x',200), y:getWelcomeNumber('welcome_text2_y',140), boxW:getWelcomeNumber('welcome_text2_box_width',500), fontSize:getWelcomeNumber('welcome_text2_font_size',32), color:getWelcomeText('welcome_text2_color','#ffffff'), align:getWelcomeText('welcome_text2_align','left'), fontName:getWelcomeText('welcome_text2_font_name','default')},
+    {key:'welcome_text3', template:getWelcomeText('welcome_text3_template',''), x:getWelcomeNumber('welcome_text3_x',200), y:getWelcomeNumber('welcome_text3_y',200), boxW:getWelcomeNumber('welcome_text3_box_width',500), fontSize:getWelcomeNumber('welcome_text3_font_size',28), color:getWelcomeText('welcome_text3_color','#ffffff'), align:getWelcomeText('welcome_text3_align','left'), fontName:getWelcomeText('welcome_text3_font_name','default')},
+  ].filter(layer => String(layer.template || '').trim());
+}
+function wrapTextLines(ctx, text, maxWidth){
+  const rawLines = String(text || '').split(/\n/g);
+  const out = [];
+  rawLines.forEach(raw => {
+    const words = String(raw || '').split(/\s+/).filter(Boolean);
+    if (!words.length) { out.push(''); return; }
+    let cur = words[0];
+    words.slice(1).forEach(w => {
+      const t = cur + ' ' + w;
+      if (ctx.measureText(t).width <= maxWidth) cur = t;
+      else { out.push(cur); cur = w; }
+    });
+    out.push(cur);
+  });
+  return out;
+}
+function loadImage(url){
+  return new Promise((resolve,reject)=>{
+    if (!url) return resolve(null);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+async function refreshWelcomePreview(){
+  const canvas = document.getElementById('welcomePreviewCanvas');
+  if (typeof previewState === 'undefined') return;
+  if (!canvas) return;
+  const bgUrl = getWelcomeText('welcome_background_url','').trim();
+  const avatarUrl = previewState.member?.avatar_url || '';
+  try{
+    previewState.bgImage = bgUrl ? await loadImage(bgUrl) : null;
+  }catch(e){
+    previewState.bgImage = null;
+  }
+  try{
+    previewState.avatarImage = avatarUrl ? await loadImage(avatarUrl) : null;
+  }catch(e){
+    previewState.avatarImage = null;
+  }
+  if (previewState.bgImage && previewState.bgImage.naturalWidth && previewState.bgImage.naturalHeight){
+    canvas.width = previewState.bgImage.naturalWidth;
+    canvas.height = previewState.bgImage.naturalHeight;
+  } else {
+    canvas.width = 960;
+    canvas.height = 540;
+  }
+  drawWelcomePreview();
+}
+function drawWelcomePreview(){
+  const canvas = document.getElementById('welcomePreviewCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  if (previewState.bgImage){
+    ctx.drawImage(previewState.bgImage, 0, 0, canvas.width, canvas.height);
+  } else {
+    const grad = ctx.createLinearGradient(0,0,canvas.width,canvas.height);
+    grad.addColorStop(0, '#111827');
+    grad.addColorStop(1, '#1e3a8a');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+  }
+
+  const ax = getWelcomeNumber('welcome_avatar_x',40);
+  const ay = getWelcomeNumber('welcome_avatar_y',40);
+  const aw = getWelcomeNumber('welcome_avatar_w',128);
+  const ah = getWelcomeNumber('welcome_avatar_h',128);
+  const shape = getWelcomeText('welcome_avatar_shape','circle');
+
+  if (previewState.avatarImage){
+    ctx.save();
+    if (shape === 'circle'){
+      ctx.beginPath();
+      ctx.ellipse(ax + aw/2, ay + ah/2, aw/2, ah/2, 0, 0, Math.PI*2);
+      ctx.clip();
+    }
+    ctx.drawImage(previewState.avatarImage, ax, ay, aw, ah);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(ax, ay, aw, ah);
+  }
+  ctx.strokeStyle = '#93c5fd';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(ax, ay, aw, ah);
+  ctx.fillStyle = '#93c5fd';
+  ctx.beginPath();
+  ctx.arc(ax+aw, ay+ah, 6, 0, Math.PI*2);
+  ctx.fill();
+
+  const infoTexts = [];
+  getTextLayers().forEach(layer => {
+    const text = applyPreviewVars(layer.template);
+    if (!text) return;
+    const family = getPreviewFontFamily(layer.fontName);
+    ctx.font = `${layer.fontSize}px ${family}`;
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = layer.color;
+    const lines = wrapTextLines(ctx, text, layer.boxW);
+    const textH = Math.max(layer.fontSize + 10, lines.length*(layer.fontSize+8));
+    lines.forEach((line, idx)=>{
+      const w = ctx.measureText(line).width;
+      let x = layer.x;
+      if (layer.align === 'center') x = layer.x + (layer.boxW - w)/2;
+      else if (layer.align === 'right') x = layer.x + Math.max(0, layer.boxW - w);
+      ctx.fillText(line, x, layer.y + idx*(layer.fontSize+8));
+    });
+    ctx.strokeStyle = '#f59e0b';
+    ctx.strokeRect(layer.x, layer.y, layer.boxW, textH);
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.arc(layer.x+layer.boxW, layer.y+textH, 6, 0, Math.PI*2);
+    ctx.fill();
+    infoTexts.push(text);
+  });
+
+  document.getElementById('previewInfoUser').textContent = normalizeMemberDisplay(previewState.member);
+  document.getElementById('previewInfoAvatar').textContent = previewState.member?.avatar_url ? '로드됨' : '기본/없음';
+  document.getElementById('previewInfoText').textContent = infoTexts.join(' / ') || '-';
+}
+
+function settingsFormEl(){
+  return document.getElementById('settingsForm');
+}
+function settingsInput(name){
+  return document.querySelector(`#settingsForm [name="${name}"]`);
+}
+async function sendWelcomeTest(){
+  const form = settingsFormEl();
+  const msgEl = document.getElementById('welcomeTestMsg');
+  if (!form) return;
+  const fd = new FormData(form);
+  msgEl.textContent = '테스트 메시지 전송 중...';
+  try{
+    const res = await fetch('/admin/test-welcome', {method:'POST', body: fd});
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.message || data.error || ('HTTP ' + res.status));
+    msgEl.textContent = data.message || '테스트 전송 완료';
+  }catch(e){
+    msgEl.textContent = '테스트 전송 실패: ' + (e?.message || e);
+  }
+}
+
+async function uploadWelcomeImage(){
+  const fileEl = document.getElementById('welcomeImageFile');
+  const msgEl = document.getElementById('welcomeUploadMsg');
+  const gid = '{{ guild_id or "" }}';
+  if (!fileEl || !fileEl.files || !fileEl.files[0]) { alert('이미지 파일을 선택해줘.'); return; }
+  const fd = new FormData();
+  fd.append('guild_id', gid);
+  fd.append('image', fileEl.files[0]);
+  msgEl.textContent = '업로드 중...';
+  try{
+    const res = await fetch('/admin/api/welcome-image-upload', {method:'POST', body: fd});
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    const input = (typeof settingsInput === 'function' ? settingsInput('welcome_background_url') : document.querySelector('#settingsForm [name="welcome_background_url"]'));
+    if (input) input.value = data.url || '';
+    msgEl.textContent = '업로드 완료: URL이 자동 입력됐어요.';
+    try { if (typeof refreshWelcomePreview === 'function') { await refreshWelcomePreview(); } } catch(e) { console.error(e); }
+  }catch(e){
+    msgEl.textContent = '업로드 실패: ' + (e?.message || e);
+  }
+}
+async function openWelcomePreviewUserPicker(){
+  await searchWelcomePreviewUsers(true);
+}
+async function searchWelcomePreviewUsers(openAll=false){
+  const gid = '{{ guild_id or "" }}';
+  const q = document.getElementById('welcomePreviewUserSearch')?.value?.trim() || '';
+  const list = document.getElementById('welcomePreviewUserList');
+  if (!gid || !list) return;
+  list.style.display = '';
+  list.innerHTML = '<div class="item">불러오는 중...</div>';
+  try{
+    const res = await fetch(`/admin/api/members_search?guild_id=${gid}&q=${encodeURIComponent(openAll ? '' : q)}`);
+    const data = await res.json();
+    const members = data.ok ? (data.members || []) : [];
+    list.innerHTML = members.slice(0,60).map(m=>{
+      const name = escapeHtml(m.display_name || m.nick || m.global_name || m.username || m.user_id);
+      return `<div class="item" onclick="selectWelcomePreviewUser('${m.user_id}')">${name} <span class="muted mono">(${m.user_id})</span></div>`;
+    }).join('') || '<div class="item">결과 없음</div>';
+  }catch(e){
+    list.innerHTML = '<div class="item">불러오기 실패</div>';
+  }
+}
+async function selectWelcomePreviewUser(uid){
+  const gid = '{{ guild_id or "" }}';
+  try{
+    const res = await fetch(`/admin/api/welcome-preview-member?guild_id=${gid}&user_id=${encodeURIComponent(uid)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'member_not_found');
+    previewState.member = data.member;
+    document.getElementById('welcomePreviewUserId').value = String(uid);
+    document.getElementById('welcomePreviewUserLabel').textContent = `${normalizeMemberDisplay(data.member)} (${data.member.user_id})`;
+    document.getElementById('welcomePreviewUserList').style.display = 'none';
+    await refreshWelcomePreview();
+  }catch(e){
+    alert('미리보기 유저를 불러오지 못했어요.');
+  }
+}
+function initWelcomePreviewInteractions(){
+  const canvas = document.getElementById('welcomePreviewCanvas');
+  if (!canvas) return;
+  function getPos(evt){
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return {x: (evt.clientX - rect.left) * sx, y: (evt.clientY - rect.top) * sy};
+  }
+  canvas.addEventListener('mousedown', (evt)=>{
+    const p = getPos(evt);
+    const ax = getWelcomeNumber('welcome_avatar_x',40);
+    const ay = getWelcomeNumber('welcome_avatar_y',40);
+    const aw = getWelcomeNumber('welcome_avatar_w',128);
+    const ah = getWelcomeNumber('welcome_avatar_h',128);
+
+    if (Math.hypot(p.x-(ax+aw), p.y-(ay+ah)) < 14){
+      previewState.drag = 'avatar-size';
+      return;
+    }
+    if (p.x>=ax && p.x<=ax+aw && p.y>=ay && p.y<=ay+ah){
+      previewState.drag = 'avatar-move';
+      previewState.dragOffsetX = p.x-ax;
+      previewState.dragOffsetY = p.y-ay;
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    for (const layer of getTextLayers().slice().reverse()){
+      const family = getPreviewFontFamily(layer.fontName);
+      ctx.font = `${layer.fontSize}px ${family}`;
+      const lines = wrapTextLines(ctx, applyPreviewVars(layer.template), layer.boxW);
+      const textH = Math.max(layer.fontSize + 10, lines.length*(layer.fontSize+8));
+      if (Math.hypot(p.x-(layer.x+layer.boxW), p.y-(layer.y+textH)) < 14){
+        previewState.drag = 'text-width';
+        previewState.dragLayerKey = layer.key;
+        return;
+      }
+      if (p.x>=layer.x && p.x<=layer.x+layer.boxW && p.y>=layer.y && p.y<=layer.y+textH){
+        previewState.drag = 'text-move';
+        previewState.dragLayerKey = layer.key;
+        previewState.dragOffsetX = p.x-layer.x;
+        previewState.dragOffsetY = p.y-layer.y;
+        return;
+      }
+    }
+    previewState.drag = null;
+    previewState.dragLayerKey = null;
+  });
+  window.addEventListener('mousemove', (evt)=>{
+    if (!previewState.drag) return;
+    const p = getPos(evt);
+    if (previewState.drag === 'avatar-move'){
+      settingsInput('welcome_avatar_x').value = Math.max(0, Math.round(p.x - previewState.dragOffsetX));
+      settingsInput('welcome_avatar_y').value = Math.max(0, Math.round(p.y - previewState.dragOffsetY));
+    } else if (previewState.drag === 'avatar-size'){
+      const ax = getWelcomeNumber('welcome_avatar_x',40);
+      const ay = getWelcomeNumber('welcome_avatar_y',40);
+      settingsInput('welcome_avatar_w').value = Math.max(16, Math.round(p.x - ax));
+      settingsInput('welcome_avatar_h').value = Math.max(16, Math.round(p.y - ay));
+    } else if (previewState.drag === 'text-move' && previewState.dragLayerKey){
+      settingsInput(previewState.dragLayerKey + '_x').value = Math.max(0, Math.round(p.x - previewState.dragOffsetX));
+      settingsInput(previewState.dragLayerKey + '_y').value = Math.max(0, Math.round(p.y - previewState.dragOffsetY));
+    } else if (previewState.drag === 'text-width' && previewState.dragLayerKey){
+      const tx = getWelcomeNumber(previewState.dragLayerKey + '_x',200);
+      settingsInput(previewState.dragLayerKey + '_box_width').value = Math.max(50, Math.round(p.x - tx));
+    }
+    drawWelcomePreview();
+  });
+  window.addEventListener('mouseup', ()=>{ previewState.drag = null; previewState.dragLayerKey = null; });
+  ['welcome_background_url','welcome_avatar_shape','welcome_avatar_x','welcome_avatar_y','welcome_avatar_w','welcome_avatar_h',
+   'welcome_text_template','welcome_text_x','welcome_text_y','welcome_text_font_size','welcome_text_color','welcome_text_align','welcome_text_font_name','welcome_text_box_width',
+   'welcome_text2_template','welcome_text2_x','welcome_text2_y','welcome_text2_font_size','welcome_text2_color','welcome_text2_align','welcome_text2_font_name','welcome_text2_box_width',
+   'welcome_text3_template','welcome_text3_x','welcome_text3_y','welcome_text3_font_size','welcome_text3_color','welcome_text3_align','welcome_text3_font_name','welcome_text3_box_width']
+    .forEach(name=>{
+      const el = settingsInput(name);
+      if (el) el.addEventListener('input', ()=>{ if (name === 'welcome_background_url') refreshWelcomePreview(); else drawWelcomePreview(); });
+      if (el) el.addEventListener('change', ()=>{ if (name === 'welcome_background_url') refreshWelcomePreview(); else drawWelcomePreview(); });
+    });
 }
 
 function initializeAdminPanes(){
