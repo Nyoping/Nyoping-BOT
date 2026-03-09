@@ -103,6 +103,10 @@ def _support_server_url() -> str:
     return _env("SUPPORT_SERVER_URL", "https://discord.gg/SUq8a4j4xB")
 
 
+def _support_server_banner_url() -> str:
+    return "/assets/images/support-server-banner.png"
+
+
 def _legal_effective_date() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
 
@@ -983,6 +987,16 @@ async def index(request: Request):
     return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request), "developer_name": _developer_name()})
 
 
+
+
+@app.get("/assets/images/support-server-banner.png")
+async def support_server_banner_image():
+    image_path = Path(__file__).parent / "assets" / "images" / "support-server-banner.png"
+    if not image_path.exists():
+        return Response(status_code=404)
+    return FileResponse(str(image_path), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/legal/privacy", response_class=HTMLResponse)
 async def legal_privacy(request: Request):
     return TEMPLATES.TemplateResponse(
@@ -1125,6 +1139,8 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "text_channels": text_channels,
             "guild_name": _safe_selected_guild_name(guilds, gid),
             "developer_name": _developer_name(),
+            "support_server_url": _support_server_url(),
+            "support_server_banner_url": _support_server_banner_url(),
             "font_options": FONT_OPTION_LABELS,
             "reaction_blocks": reaction_blocks,
             "reaction_role_rules": display_reaction_role_rules,
