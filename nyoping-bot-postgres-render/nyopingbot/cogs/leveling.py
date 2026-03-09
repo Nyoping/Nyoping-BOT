@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import logging
+from datetime import datetime, timezone, timedelta
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -23,11 +24,115 @@ from ..db import (
     top_users_current_members,
     count_ranked_members,
     get_current_member_rank,
+    get_voice_xp_daily,
+    add_voice_xp_daily,
 )
 from ..utils import kst_today_ymd, kst_yesterday_ymd, xp_to_level
 from ..role_sync import compute_expected_and_managed_roles, sync_member_roles
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _voice_state_blocked(state: discord.VoiceState | None) -> bool:
+    if state is None:
+        return False
+    return bool(getattr(state, "self_mute", False) or getattr(state, "self_deaf", False))
+
+
+def _voice_settings_values(settings: dict) -> dict[str, int | bool]:
+    enabled = bool(settings.get("voice_xp_enabled", True))
+    interval_min = max(1, int(settings.get("voice_xp_interval_min", 1) or 1))
+    amount = max(0, int(settings.get("voice_xp_amount", settings.get("voice_xp_per_min", 2)) or 0))
+    daily_cap = max(0, int(settings.get("voice_xp_daily_cap", 0) or 0))
+    block_delay_min = max(0, int(settings.get("voice_xp_block_delay_min", 1) or 0))
+    return {
+        "enabled": enabled,
+        "interval_min": interval_min,
+        "amount": amount,
+        "daily_cap": daily_cap,
+        "block_delay_min": block_delay_min,
+    }
+
+
+def _voice_eligible_elapsed_secs(
+    *,
+    started_at: datetime,
+    ended_at: datetime,
+    state: discord.VoiceState | None,
+    muted_since: datetime | None,
+    block_delay_min: int,
+) -> int:
+    if state is None or getattr(state, "channel", None) is None or ended_at <= started_at:
+        return 0
+
+    total_secs = int((ended_at - started_at).total_seconds())
+    if total_secs <= 0:
+        return 0
+
+    if not _voice_state_blocked(state):
+        return total_secs
+
+    if block_delay_min <= 0:
+        return 0
+
+    if muted_since is None:
+        muted_since = started_at
+    grace_until = muted_since + timedelta(minutes=int(block_delay_min))
+    eligible_end = min(ended_at, grace_until)
+    eligible_secs = int((eligible_end - started_at).total_seconds())
+    return max(0, min(total_secs, eligible_secs))
+
+
+def _voice_session_init(state: discord.VoiceState | None, now: datetime) -> dict[str, object]:
+    return {
+        "last_ts": now,
+        "eligible_secs": 0,
+        "muted_since": now if _voice_state_blocked(state) else None,
+    }
+
+
+def _voice_apply_elapsed(session: dict[str, object], before: discord.VoiceState | None, now: datetime, block_delay_min: int) -> None:
+    last_ts = session.get("last_ts")
+    if not isinstance(last_ts, datetime):
+        session["last_ts"] = now
+        return
+    muted_since = session.get("muted_since") if isinstance(session.get("muted_since"), datetime) else None
+    add_secs = _voice_eligible_elapsed_secs(
+        started_at=last_ts,
+        ended_at=now,
+        state=before,
+        muted_since=muted_since,
+        block_delay_min=block_delay_min,
+    )
+    session["eligible_secs"] = int(session.get("eligible_secs") or 0) + max(0, int(add_secs))
+    session["last_ts"] = now
+
+
+def _voice_update_block_state(session: dict[str, object], before: discord.VoiceState | None, after: discord.VoiceState | None, now: datetime) -> None:
+    if after is None or getattr(after, "channel", None) is None:
+        session["muted_since"] = None
+        return
+    if _voice_state_blocked(after):
+        if not _voice_state_blocked(before):
+            session["muted_since"] = now
+        elif not isinstance(session.get("muted_since"), datetime):
+            session["muted_since"] = now
+    else:
+        session["muted_since"] = None
+
+
+def _voice_delta_from_eligible_secs(eligible_secs: int, interval_min: int, amount: int) -> tuple[int, int]:
+    eligible_mins = max(0, int(eligible_secs) // 60)
+    if interval_min <= 0 or amount <= 0 or eligible_mins <= 0:
+        return 0, eligible_mins
+    blocks = eligible_mins // int(interval_min)
+    if blocks <= 0:
+        return 0, eligible_mins
+    return blocks * int(amount), eligible_mins
 
 
 def _member_role_ids(member: discord.abc.User) -> list[int]:
@@ -254,6 +359,7 @@ class LevelingCog(commands.Cog):
                 getattr(member, "global_name", None),
                 getattr(member, "nick", None),
                 getattr(member, "display_name", None),
+                getattr(getattr(member, "display_avatar", None), "url", None),
                 role_ids=_member_role_ids(member),
                 in_guild=True,
             )
@@ -261,37 +367,60 @@ class LevelingCog(commands.Cog):
             pass
 
         key = (member.guild.id, member.id)
-        from datetime import datetime, timezone
+        now = _utcnow()
+        settings = await get_guild_settings(self.bot.db_pool, member.guild.id)
+        voice_cfg = _voice_settings_values(settings)
+        sessions = getattr(self.bot, "_voice_sessions", None)
+        if sessions is None:
+            self.bot._voice_sessions = {}
+            sessions = self.bot._voice_sessions
 
-        # join
-        if before.channel is None and after.channel is not None:
-            self.bot._voice_joined_at[key] = datetime.now(tz=timezone.utc)
+        session = sessions.get(key)
+
+        if before.channel is None and after.channel is not None and session is None:
+            sessions[key] = _voice_session_init(after, now)
             return
 
-        # leave
+        if session is None:
+            if after.channel is not None:
+                sessions[key] = _voice_session_init(after, now)
+            return
+
+        _voice_apply_elapsed(session, before, now, int(voice_cfg["block_delay_min"]))
+
         if before.channel is not None and after.channel is None:
-            joined = self.bot._voice_joined_at.pop(key, None)
-            if not joined:
+            sessions.pop(key, None)
+            if not bool(voice_cfg["enabled"]):
                 return
-            secs = int((datetime.now(tz=timezone.utc) - joined).total_seconds())
-            mins = secs // 60
-            if mins <= 0:
+
+            delta, eligible_mins = _voice_delta_from_eligible_secs(
+                int(session.get("eligible_secs") or 0),
+                int(voice_cfg["interval_min"]),
+                int(voice_cfg["amount"]),
+            )
+            if delta <= 0:
                 return
-            settings = await get_guild_settings(self.bot.db_pool, member.guild.id)
-            per_min = int(settings.get("voice_xp_per_min", 2))
-            if per_min <= 0:
+
+            today = kst_today_ymd()
+            daily_cap = int(voice_cfg["daily_cap"])
+            if daily_cap > 0:
+                gained_today = await get_voice_xp_daily(self.bot.db_pool, member.guild.id, member.id, today)
+                remain = max(0, daily_cap - int(gained_today))
+                delta = min(delta, remain)
+            if delta <= 0:
                 return
-            delta = mins * per_min
+
             before_xp = await get_user_xp(self.bot.db_pool, member.guild.id, member.id)
             before_lv = xp_to_level(before_xp)
             xp = await add_user_xp(self.bot.db_pool, member.guild.id, member.id, delta)
-            settings = await get_guild_settings(self.bot.db_pool, member.guild.id)
+            await add_voice_xp_daily(self.bot.db_pool, member.guild.id, member.id, today, delta)
+
             await _send_auto_notice(
                 self.bot,
                 member.guild,
                 member,
                 mode=str(settings.get("voice_xp_delivery_mode") or ("dm" if bool(settings.get("voice_dm_summary_enabled", True)) else "off")),
-                text=f"🎧 {member.mention}\n이번 통화로 +{delta}XP를 얻었어요. ({mins}분)",
+                text=f"🎧 {member.mention}\n이번 통화로 +{delta}XP를 얻었어요. (인정 {eligible_mins}분)",
             )
             after_lv = xp_to_level(xp)
             if after_lv != before_lv:
@@ -309,6 +438,9 @@ class LevelingCog(commands.Cog):
                     mode=str(settings.get("levelup_delivery_mode") or "channel"),
                     text=f"🎙️ {member.mention} 레벨 업! Lv.{before_lv} → Lv.{after_lv}{extra}",
                 )
+            return
+
+        _voice_update_block_state(session, before, after, now)
 
     @app_commands.command(
         name=app_commands.locale_str("checkin", key="cmd_checkin_name"),

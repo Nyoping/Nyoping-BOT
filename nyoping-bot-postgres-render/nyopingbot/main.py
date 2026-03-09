@@ -50,6 +50,7 @@ class NyopingBot(commands.Bot):
         self.log_level = log_level
         self.force_resync = force_resync
         self._voice_joined_at: dict[tuple[int, int], object] = {}
+        self._voice_sessions: dict[tuple[int, int], dict[str, object]] = {}
         self._cache_task: asyncio.Task | None = None
         self._role_sync_task: asyncio.Task | None = None
 

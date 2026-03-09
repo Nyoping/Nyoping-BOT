@@ -161,8 +161,38 @@
           <input type="number" name="message_cooldown_sec" value="{{ settings.message_cooldown_sec }}" min="0" max="3600">
         </div>
         <div class="col">
-          <label>음성 XP(분당)</label>
-          <input type="number" name="voice_xp_per_min" value="{{ settings.voice_xp_per_min }}" min="0" max="1000">
+          <label>통화 XP 사용</label>
+          <select name="voice_xp_enabled">
+            <option value="on" {% if settings.voice_xp_enabled is not defined or settings.voice_xp_enabled %}selected{% endif %}>ON</option>
+            <option value="off" {% if settings.voice_xp_enabled is defined and not settings.voice_xp_enabled %}selected{% endif %}>OFF</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>통화 XP 몇 분마다</label>
+          <input type="number" name="voice_xp_interval_min" value="{{ settings.voice_xp_interval_min if settings.voice_xp_interval_min is defined else 1 }}" min="1" max="1440">
+        </div>
+        <div class="col">
+          <label>통화 XP 지급량</label>
+          <input type="number" name="voice_xp_amount" value="{{ settings.voice_xp_amount if settings.voice_xp_amount is defined else settings.voice_xp_per_min }}" min="0" max="100000">
+        </div>
+        <div class="col">
+          <label>통화 XP 하루 상한 (0=무제한)</label>
+          <input type="number" name="voice_xp_daily_cap" value="{{ settings.voice_xp_daily_cap if settings.voice_xp_daily_cap is defined else 0 }}" min="0" max="100000">
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>음소거/헤드셋 끔 차단 분</label>
+          <input type="number" name="voice_xp_block_delay_min" value="{{ settings.voice_xp_block_delay_min if settings.voice_xp_block_delay_min is defined else 1 }}" min="0" max="1440">
+          <div class="small">selfMute 또는 selfDeaf 상태가 이 시간 이상 유지되면 그 이후부터 통화 XP를 멈춰요.</div>
+        </div>
+        <div class="col">
+          <label>설명</label>
+          <div class="small" style="margin-top:8px">예: 10분마다 20XP, 하루 최대 200XP처럼 운영할 수 있어요.</div>
         </div>
       </div>
 

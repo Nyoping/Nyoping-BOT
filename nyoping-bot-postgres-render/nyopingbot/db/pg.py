@@ -10,7 +10,20 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   checkin_limit_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   message_xp INTEGER NOT NULL DEFAULT 5,
   message_cooldown_sec INTEGER NOT NULL DEFAULT 60,
-  voice_xp_per_min INTEGER NOT NULL DEFAULT 2
+  voice_xp_per_min INTEGER NOT NULL DEFAULT 2,
+  voice_xp_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  voice_xp_interval_min INTEGER NOT NULL DEFAULT 1,
+  voice_xp_amount INTEGER NOT NULL DEFAULT 2,
+  voice_xp_daily_cap INTEGER NOT NULL DEFAULT 0,
+  voice_xp_block_delay_min INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS voice_xp_daily (
+  guild_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  ymd TEXT NOT NULL,
+  xp INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (guild_id, user_id, ymd)
 );
 
 CREATE TABLE IF NOT EXISTS user_stats (
@@ -227,6 +240,32 @@ async def update_guild_settings(pool: asyncpg.Pool, guild_id: int, **updates: An
     sql = f"UPDATE guild_settings SET {sets} WHERE guild_id=$1"
     async with pool.acquire() as conn:
         await conn.execute(sql, guild_id, *vals)
+
+async def get_voice_xp_daily(pool: asyncpg.Pool, guild_id: int, user_id: int, ymd: str) -> int:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT xp FROM voice_xp_daily WHERE guild_id=$1 AND user_id=$2 AND ymd=$3",
+            int(guild_id), int(user_id), str(ymd),
+        )
+    return int(row["xp"]) if row else 0
+
+async def add_voice_xp_daily(pool: asyncpg.Pool, guild_id: int, user_id: int, ymd: str, delta: int) -> int:
+    delta = max(int(delta), 0)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO voice_xp_daily (guild_id, user_id, ymd, xp)
+            VALUES ($1,$2,$3,$4)
+            ON CONFLICT (guild_id, user_id, ymd)
+            DO UPDATE SET xp = voice_xp_daily.xp + $4
+            """,
+            int(guild_id), int(user_id), str(ymd), delta
+        )
+        row = await conn.fetchrow(
+            "SELECT xp FROM voice_xp_daily WHERE guild_id=$1 AND user_id=$2 AND ymd=$3",
+            int(guild_id), int(user_id), str(ymd),
+        )
+    return int(row["xp"]) if row else 0
 
 async def get_user_xp(pool: asyncpg.Pool, guild_id: int, user_id: int) -> int:
     async with pool.acquire() as conn:

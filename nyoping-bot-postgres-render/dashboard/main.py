@@ -464,7 +464,20 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   checkin_limit_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   message_xp INTEGER NOT NULL DEFAULT 5,
   message_cooldown_sec INTEGER NOT NULL DEFAULT 60,
-  voice_xp_per_min INTEGER NOT NULL DEFAULT 2
+  voice_xp_per_min INTEGER NOT NULL DEFAULT 2,
+  voice_xp_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  voice_xp_interval_min INTEGER NOT NULL DEFAULT 1,
+  voice_xp_amount INTEGER NOT NULL DEFAULT 2,
+  voice_xp_daily_cap INTEGER NOT NULL DEFAULT 0,
+  voice_xp_block_delay_min INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS voice_xp_daily (
+  guild_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  ymd TEXT NOT NULL,
+  xp INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (guild_id, user_id, ymd)
 );
 
 CREATE TABLE IF NOT EXISTS user_stats (
@@ -1201,7 +1214,12 @@ async def save_settings(
     checkin_limit_enabled: str = Form("on"),
     message_xp: int = Form(...),
     message_cooldown_sec: int = Form(...),
-    voice_xp_per_min: int = Form(...),
+    voice_xp_per_min: int = Form(2),
+    voice_xp_enabled: str = Form("on"),
+    voice_xp_interval_min: int = Form(1),
+    voice_xp_amount: int = Form(2),
+    voice_xp_daily_cap: int = Form(0),
+    voice_xp_block_delay_min: int = Form(1),
     checkin_streak_bonus_per_day: int = Form(0),
     checkin_streak_bonus_cap: int = Form(0),
     checkin_delivery_mode: str = Form("ephemeral"),
@@ -1266,7 +1284,12 @@ welcome_text3_box_width: int = Form(500),
         checkin_limit_enabled=(checkin_limit_enabled == "on"),
         message_xp=int(message_xp),
         message_cooldown_sec=int(message_cooldown_sec),
-        voice_xp_per_min=int(voice_xp_per_min),
+        voice_xp_per_min=(int(voice_xp_amount or 0) if int(voice_xp_interval_min or 1) <= 1 else 0),
+        voice_xp_enabled=(voice_xp_enabled == "on"),
+        voice_xp_interval_min=max(1, int(voice_xp_interval_min or 1)),
+        voice_xp_amount=max(0, int(voice_xp_amount or 0)),
+        voice_xp_daily_cap=max(0, int(voice_xp_daily_cap or 0)),
+        voice_xp_block_delay_min=max(0, int(voice_xp_block_delay_min or 0)),
         checkin_streak_bonus_per_day=int(checkin_streak_bonus_per_day),
         checkin_streak_bonus_cap=int(checkin_streak_bonus_cap),
         checkin_delivery_mode=_normalize_command_delivery_mode(checkin_delivery_mode, "ephemeral"),
