@@ -22,6 +22,7 @@ from ..db import (
     list_level_role_sets,
     top_users_current_members,
     count_ranked_members,
+    get_current_member_rank,
 )
 from ..utils import kst_today_ymd, kst_yesterday_ymd, xp_to_level
 from ..role_sync import compute_expected_and_managed_roles, sync_member_roles
@@ -38,15 +39,86 @@ def _member_role_ids(member: discord.abc.User) -> list[int]:
     return []
 
 
-async def _send_notify_message(bot: commands.Bot, guild_id: int, text: str) -> None:
+
+async def _resolve_notify_channel(bot: commands.Bot, guild: discord.Guild | None):
+    if guild is None:
+        return None
     try:
-        s = await get_guild_settings(bot.db_pool, guild_id)
+        s = await get_guild_settings(bot.db_pool, guild.id)
         cid = int(s.get("notify_channel_id") or 0)
         if cid <= 0:
+            return None
+        ch = guild.get_channel(cid) or bot.get_channel(cid)
+        return ch
+    except Exception:
+        return None
+
+def _normalize_command_delivery_mode(value: str | None, default: str = "ephemeral") -> str:
+    mode = str(value or default).strip().lower()
+    return mode if mode in {"ephemeral", "channel", "dm"} else default
+
+def _normalize_auto_delivery_mode(value: str | None, default: str = "channel") -> str:
+    mode = str(value or default).strip().lower()
+    return mode if mode in {"channel", "dm", "off"} else default
+
+async def _deliver_command_result(
+    bot: commands.Bot,
+    interaction: discord.Interaction,
+    *,
+    mode: str,
+    content: str | None = None,
+    embed: discord.Embed | None = None,
+    view: discord.ui.View | None = None,
+) -> None:
+    mode = _normalize_command_delivery_mode(mode, "ephemeral")
+    if mode == "ephemeral":
+        await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=True)
+        return
+
+    if mode == "dm":
+        try:
+            await interaction.user.send(content=content, embed=embed, view=view)
+            await interaction.followup.send("DM으로 보냈어요.", ephemeral=True)
             return
-        ch = bot.get_channel(cid)
-        if ch is None:
+        except Exception:
+            await interaction.followup.send(content=content or "DM 전송에 실패해서 본인만 보기로 대신 보여드려요.", embed=embed, view=view, ephemeral=True)
             return
+
+    ch = await _resolve_notify_channel(bot, interaction.guild)
+    if ch is None:
+        await interaction.followup.send(content=content or "공개 알림 채널이 설정되지 않아서 본인만 보기로 대신 보여드려요.", embed=embed, view=view, ephemeral=True)
+        return
+
+    await ch.send(content=content, embed=embed, view=view)
+    try:
+        mention = getattr(ch, "mention", "#알림채널")
+    except Exception:
+        mention = "#알림채널"
+    await interaction.followup.send(f"{mention} 채널로 보냈어요.", ephemeral=True)
+
+async def _send_auto_notice(
+    bot: commands.Bot,
+    guild: discord.Guild | None,
+    user: discord.abc.User | None,
+    *,
+    mode: str,
+    text: str,
+) -> None:
+    mode = _normalize_auto_delivery_mode(mode, "channel")
+    if mode == "off":
+        return
+
+    if mode == "dm" and user is not None:
+        try:
+            await user.send(text)
+            return
+        except Exception:
+            return
+
+    ch = await _resolve_notify_channel(bot, guild)
+    if ch is None:
+        return
+    try:
         await ch.send(text)
     except Exception:
         return
@@ -214,11 +286,13 @@ class LevelingCog(commands.Cog):
             before_lv = xp_to_level(before_xp)
             xp = await add_user_xp(self.bot.db_pool, member.guild.id, member.id, delta)
             settings = await get_guild_settings(self.bot.db_pool, member.guild.id)
-            if bool(settings.get("voice_dm_summary_enabled", True)):
-                try:
-                    await member.send(f"🎧 이번 통화로 +{delta}XP를 얻었어요. ({mins}분)")
-                except Exception:
-                    pass
+            await _send_auto_notice(
+                self.bot,
+                member.guild,
+                member,
+                mode=str(settings.get("voice_xp_delivery_mode") or ("dm" if bool(settings.get("voice_dm_summary_enabled", True)) else "off")),
+                text=f"🎧 {member.mention} 이번 통화로 +{delta}XP를 얻었어요. ({mins}분)",
+            )
             after_lv = xp_to_level(xp)
             if after_lv != before_lv:
                 added_ids, removed_ids = await self._sync_roles_for_level(member.guild, member.id, after_lv, reason=f"레벨 변경(Lv.{before_lv}→Lv.{after_lv})")
@@ -228,7 +302,13 @@ class LevelingCog(commands.Cog):
                 if removed_ids:
                     role_bits.append("제거: " + " ".join(f"<@&{i}>" for i in removed_ids))
                 extra = "\n" + "\n".join(role_bits) if role_bits else ""
-                await _send_notify_message(self.bot, member.guild.id, f"🎙️ {member.mention} 레벨 업! Lv.{before_lv} → Lv.{after_lv}{extra}")
+                await _send_auto_notice(
+                    self.bot,
+                    member.guild,
+                    member,
+                    mode=str(settings.get("levelup_delivery_mode") or "channel"),
+                    text=f"🎙️ {member.mention} 레벨 업! Lv.{before_lv} → Lv.{after_lv}{extra}",
+                )
 
     @app_commands.command(
         name=app_commands.locale_str("checkin", key="cmd_checkin_name"),
@@ -317,10 +397,12 @@ class LevelingCog(commands.Cog):
                     role_bits.append("제거: " + " ".join(f"<@&{i}>" for i in removed_ids))
                 extra = "\n" + "\n".join(role_bits) if role_bits else ""
                 try:
-                    await _send_notify_message(
+                    await _send_auto_notice(
                         self.bot,
-                        interaction.guild.id,
-                        f"✅ {interaction.user.mention} 레벨 업! Lv.{before_lv} → Lv.{after_lv}{extra}",
+                        interaction.guild,
+                        interaction.user,
+                        mode=str(settings.get("levelup_delivery_mode") or "channel"),
+                        text=f"✅ {interaction.user.mention} 레벨 업! Lv.{before_lv} → Lv.{after_lv}{extra}",
                     )
                 except Exception:
                     log.exception("checkin notify failed guild=%s user=%s", interaction.guild.id, interaction.user.id)
@@ -331,7 +413,12 @@ class LevelingCog(commands.Cog):
                 if not limit_enabled and bonus_per_day <= 0:
                     msg += " [테스트 모드 기본 보너스 적용]"
             msg += f"\n현재 {xp}XP / Lv.{after_lv}"
-            await interaction.followup.send(msg, ephemeral=True)
+            await _deliver_command_result(
+                self.bot,
+                interaction,
+                mode=str(settings.get("checkin_delivery_mode") or "ephemeral"),
+                content=msg,
+            )
         except Exception:
             log.exception("checkin command failed guild=%s user=%s", getattr(interaction.guild, 'id', None), getattr(interaction.user, 'id', None))
             try:
@@ -350,14 +437,37 @@ class LevelingCog(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         target = user or interaction.user
+        try:
+            await upsert_member_cache(
+                self.bot.db_pool,
+                interaction.guild.id,
+                target.id,
+                getattr(target, "name", None),
+                getattr(target, "discriminator", None),
+                getattr(target, "global_name", None),
+                getattr(target, "nick", None),
+                getattr(target, "display_name", None),
+                getattr(getattr(target, "display_avatar", None), "url", None),
+                role_ids=_member_role_ids(target),
+                in_guild=True,
+            )
+        except Exception:
+            pass
+
+        settings = await get_guild_settings(self.bot.db_pool, interaction.guild.id)
         xp = await get_user_xp(self.bot.db_pool, interaction.guild.id, target.id)
         lvl = xp_to_level(xp)
         c = await get_checkin_count(self.bot.db_pool, interaction.guild.id, target.id)
         streak_info = await get_checkin_streak(self.bot.db_pool, interaction.guild.id, target.id)
         streak = int(streak_info.get("streak") or 0)
-        await interaction.followup.send(
-            f"👤 {target.mention}\nXP: {xp}\n레벨: Lv.{lvl}\n출석: {c}회\n연속 출석: {streak}일",
-            ephemeral=True,
+        rank = await get_current_member_rank(self.bot.db_pool, interaction.guild.id, target.id)
+        total = await count_ranked_members(self.bot.db_pool, interaction.guild.id)
+        rank_line = f"현재 랭킹: {rank}위 / {total}명" if rank is not None and total > 0 else "현재 랭킹: 집계 전"
+        await _deliver_command_result(
+            self.bot,
+            interaction,
+            mode=str(settings.get("profile_delivery_mode") or "ephemeral"),
+            content=f"👤 {target.mention}\nXP: {xp}\n레벨: Lv.{lvl}\n{rank_line}\n출석: {c}회\n연속 출석: {streak}일",
         )
 
 
@@ -376,7 +486,14 @@ class LevelingCog(commands.Cog):
             return
         view = LeaderboardView(self, interaction.guild.id, interaction.user.id, page=0, per_page=10, total=total)
         embed = await view._render()
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        settings = await get_guild_settings(self.bot.db_pool, interaction.guild.id)
+        await _deliver_command_result(
+            self.bot,
+            interaction,
+            mode=str(settings.get("leaderboard_delivery_mode") or "ephemeral"),
+            embed=embed,
+            view=view,
+        )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LevelingCog(bot))

@@ -74,6 +74,12 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
         # guild_settings: streak bonus settings
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_per_day INTEGER NOT NULL DEFAULT 0;")
         await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_streak_bonus_cap INTEGER NOT NULL DEFAULT 0;")
+# delivery mode settings
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS profile_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS leaderboard_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS levelup_delivery_mode TEXT NOT NULL DEFAULT 'channel';")
+        await conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_delivery_mode TEXT NOT NULL DEFAULT 'dm';")
 
         # checkin streak tracking
         await conn.execute("""CREATE TABLE IF NOT EXISTS checkin_streaks (
@@ -589,6 +595,36 @@ async def count_ranked_members(pool: asyncpg.Pool, guild_id: int) -> int:
             guild_id
         )
     return int(c or 0)
+
+
+async def get_current_member_rank(pool: asyncpg.Pool, guild_id: int, user_id: int) -> int | None:
+    async with pool.acquire() as conn:
+        rank = await conn.fetchval(
+            """WITH me AS (
+                   SELECT m.user_id, COALESCE(s.xp, 0) AS xp
+                   FROM guild_members_cache m
+                   LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
+                   WHERE m.guild_id=$1 AND m.user_id=$2 AND m.in_guild=TRUE
+               )
+               SELECT CASE
+                   WHEN EXISTS(SELECT 1 FROM me) THEN
+                       1 + (
+                           SELECT COUNT(*)
+                           FROM guild_members_cache m
+                           LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
+                           CROSS JOIN me
+                           WHERE m.guild_id=$1
+                             AND m.in_guild=TRUE
+                             AND (
+                                 COALESCE(s.xp, 0) > me.xp
+                                 OR (COALESCE(s.xp, 0) = me.xp AND m.user_id < me.user_id)
+                             )
+                       )
+                   ELSE NULL
+               END""",
+            guild_id, user_id
+        )
+    return int(rank) if rank is not None else None
 
 async def set_member_in_guild(pool: asyncpg.Pool, guild_id: int, user_id: int, in_guild: bool) -> None:
     async with pool.acquire() as conn:

@@ -166,6 +166,58 @@
         </div>
       </div>
 
+      <h3 style="margin:14px 0 8px">안내 방식</h3>
+      <div class="small" style="margin-bottom:8px">공개 선택 시 아래 공개 알림 채널로 보내요. 자동 알림은 본인만 보기(ephemeral)가 불가능해서 DM / 공개 / 끄기 기준으로 설정돼요.</div>
+
+      <div class="row">
+        <div class="col">
+          <label>/출석 결과</label>
+          <select name="checkin_delivery_mode">
+            <option value="ephemeral" {% if settings.checkin_delivery_mode is not defined or settings.checkin_delivery_mode == 'ephemeral' %}selected{% endif %}>본인만 보기</option>
+            <option value="channel" {% if settings.checkin_delivery_mode is defined and settings.checkin_delivery_mode == 'channel' %}selected{% endif %}>공개 알림 채널</option>
+            <option value="dm" {% if settings.checkin_delivery_mode is defined and settings.checkin_delivery_mode == 'dm' %}selected{% endif %}>DM</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>/프로필 결과</label>
+          <select name="profile_delivery_mode">
+            <option value="ephemeral" {% if settings.profile_delivery_mode is not defined or settings.profile_delivery_mode == 'ephemeral' %}selected{% endif %}>본인만 보기</option>
+            <option value="channel" {% if settings.profile_delivery_mode is defined and settings.profile_delivery_mode == 'channel' %}selected{% endif %}>공개 알림 채널</option>
+            <option value="dm" {% if settings.profile_delivery_mode is defined and settings.profile_delivery_mode == 'dm' %}selected{% endif %}>DM</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>/랭킹 결과</label>
+          <select name="leaderboard_delivery_mode">
+            <option value="ephemeral" {% if settings.leaderboard_delivery_mode is not defined or settings.leaderboard_delivery_mode == 'ephemeral' %}selected{% endif %}>본인만 보기</option>
+            <option value="channel" {% if settings.leaderboard_delivery_mode is defined and settings.leaderboard_delivery_mode == 'channel' %}selected{% endif %}>공개 알림 채널</option>
+            <option value="dm" {% if settings.leaderboard_delivery_mode is defined and settings.leaderboard_delivery_mode == 'dm' %}selected{% endif %}>DM</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>레벨업 자동 알림</label>
+          <select name="levelup_delivery_mode">
+            <option value="channel" {% if settings.levelup_delivery_mode is not defined or settings.levelup_delivery_mode == 'channel' %}selected{% endif %}>공개 알림 채널</option>
+            <option value="dm" {% if settings.levelup_delivery_mode is defined and settings.levelup_delivery_mode == 'dm' %}selected{% endif %}>DM</option>
+            <option value="off" {% if settings.levelup_delivery_mode is defined and settings.levelup_delivery_mode == 'off' %}selected{% endif %}>끄기</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>통화 XP 자동 알림</label>
+          <select name="voice_xp_delivery_mode">
+            <option value="dm" {% if settings.voice_xp_delivery_mode is not defined or settings.voice_xp_delivery_mode == 'dm' %}selected{% endif %}>DM</option>
+            <option value="channel" {% if settings.voice_xp_delivery_mode is defined and settings.voice_xp_delivery_mode == 'channel' %}selected{% endif %}>공개 알림 채널</option>
+            <option value="off" {% if settings.voice_xp_delivery_mode is defined and settings.voice_xp_delivery_mode == 'off' %}selected{% endif %}>끄기</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>설명</label>
+          <div class="small" style="margin-top:8px">자동 알림은 상호작용 명령어가 아니라서 ‘본인만 보기’는 불가능해요. 그래서 DM / 공개 / 끄기 형태로 넣었습니다.</div>
+        </div>
+      </div>
 
 <div class="btnrow" style="margin-top:12px">
         <button class="btn" type="submit">레벨 설정 저장</button>
@@ -450,7 +502,7 @@
     </div>
   {% endfor %}
 </div>
-<label>공개 알림 채널 (레벨업/역할변경)</label>
+<label>공개 알림 채널 (레벨업/프로필/랭킹/통화XP 공개용)</label>
 {% set _nch = settings.notify_channel_id|string if settings and settings.notify_channel_id is not none else '' %}
 {% if text_channels and text_channels|length > 0 %}
 <select name="notify_channel_id">
@@ -463,15 +515,6 @@
 <input name="notify_channel_id" value="{{ settings.notify_channel_id or '' }}" placeholder="예: 1234567890">
 {% endif %}
 
-<div class="row">
-  <div class="col">
-    <label>통화 종료 DM 요약</label>
-    <select name="voice_dm_summary_enabled">
-      <option value="on" {% if settings.voice_dm_summary_enabled is not defined or settings.voice_dm_summary_enabled %}selected{% endif %}>ON</option>
-      <option value="off" {% if settings.voice_dm_summary_enabled is defined and not settings.voice_dm_summary_enabled %}selected{% endif %}>OFF</option>
-    </select>
-  </div>
-</div>
 
 <label>고정 랭킹 채널</label>
 {% set _lch = settings.leaderboard_channel_id|string if settings and settings.leaderboard_channel_id is not none else '' %}

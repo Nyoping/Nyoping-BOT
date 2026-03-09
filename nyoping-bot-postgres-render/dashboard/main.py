@@ -135,6 +135,15 @@ def _to_int(value: Any, default: int = 0) -> int:
 def _to_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "on", "yes", "y"}
 
+
+def _normalize_command_delivery_mode(value: Any, default: str = "ephemeral") -> str:
+    mode = str(value or default).strip().lower()
+    return mode if mode in {"ephemeral", "channel", "dm"} else default
+
+def _normalize_auto_delivery_mode(value: Any, default: str = "channel") -> str:
+    mode = str(value or default).strip().lower()
+    return mode if mode in {"channel", "dm", "off"} else default
+
 def _safe_font(name: str, size: int):
     lname = str(name or "default").lower()
     candidates: list[str] = []
@@ -600,6 +609,11 @@ MIGRATIONS_SQL = [
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS leaderboard_channel_id BIGINT NOT NULL DEFAULT 0;",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS leaderboard_message_id BIGINT NOT NULL DEFAULT 0;",
 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_dm_summary_enabled BOOLEAN NOT NULL DEFAULT TRUE;",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS checkin_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS profile_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS leaderboard_delivery_mode TEXT NOT NULL DEFAULT 'ephemeral';",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS levelup_delivery_mode TEXT NOT NULL DEFAULT 'channel';",
+"ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS voice_xp_delivery_mode TEXT NOT NULL DEFAULT 'dm';",
 """CREATE TABLE IF NOT EXISTS invite_cache (
     guild_id BIGINT NOT NULL,
     code TEXT NOT NULL,
@@ -1190,6 +1204,11 @@ async def save_settings(
     voice_xp_per_min: int = Form(...),
     checkin_streak_bonus_per_day: int = Form(0),
     checkin_streak_bonus_cap: int = Form(0),
+    checkin_delivery_mode: str = Form("ephemeral"),
+    profile_delivery_mode: str = Form("ephemeral"),
+    leaderboard_delivery_mode: str = Form("ephemeral"),
+    levelup_delivery_mode: str = Form("channel"),
+    voice_xp_delivery_mode: str = Form("dm"),
     welcome_enabled: str = Form("off"),
     welcome_channel_id: str = Form(""),
     welcome_message_template: str = Form("환영합니다 [user]!"),
@@ -1250,6 +1269,11 @@ welcome_text3_box_width: int = Form(500),
         voice_xp_per_min=int(voice_xp_per_min),
         checkin_streak_bonus_per_day=int(checkin_streak_bonus_per_day),
         checkin_streak_bonus_cap=int(checkin_streak_bonus_cap),
+        checkin_delivery_mode=_normalize_command_delivery_mode(checkin_delivery_mode, "ephemeral"),
+        profile_delivery_mode=_normalize_command_delivery_mode(profile_delivery_mode, "ephemeral"),
+        leaderboard_delivery_mode=_normalize_command_delivery_mode(leaderboard_delivery_mode, "ephemeral"),
+        levelup_delivery_mode=_normalize_auto_delivery_mode(levelup_delivery_mode, "channel"),
+        voice_xp_delivery_mode=_normalize_auto_delivery_mode(voice_xp_delivery_mode, "dm"),
         welcome_enabled=(welcome_enabled == "on"),
         welcome_channel_id=int(welcome_channel_id or 0),
         welcome_message_template=str(welcome_message_template or ""),
@@ -1295,7 +1319,7 @@ welcome_text3_box_width=int(welcome_text3_box_width or 500),
         voice_afk_disconnect_enabled=(voice_afk_disconnect_enabled == "on"),
         voice_afk_disconnect_delay_sec=int(voice_afk_disconnect_delay_sec or 60),
         leaderboard_channel_id=int(leaderboard_channel_id or 0),
-        voice_dm_summary_enabled=(voice_dm_summary_enabled == "on"),
+        voice_dm_summary_enabled=(_normalize_auto_delivery_mode(voice_xp_delivery_mode, "dm") != "off"),
     )
     return RedirectResponse(url=f"/admin?guild_id={guild_id}&msg=설정+저장+완료", status_code=302)
 
