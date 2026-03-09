@@ -227,10 +227,13 @@ def _replace_vars_for_preview(
     channel_mode: str = "preview",
 ) -> str:
     text = str(template or "")
+    mode = str(channel_mode or "preview").lower()
     channel_name = str(mention_channel_name or "").strip()
-    use_channel_mention = str(channel_mode or "preview").lower() == "message" and int(mention_channel_id or 0) > 0
+    use_message_mode = mode == "message"
+    use_channel_mention = use_message_mode and int(mention_channel_id or 0) > 0
+    user_value = f"<@{int(user_id)}>" if use_message_mode and int(user_id or 0) > 0 else str(display_name or f"유저{int(user_id)}")
     rep = {
-        "[user]": str(display_name or f"유저{int(user_id)}"),
+        "[user]": user_value,
         "[server]": str(guild_name or ""),
         "[inviter]": "초대한사람",
         "[discord]": str(int(user_id)),
