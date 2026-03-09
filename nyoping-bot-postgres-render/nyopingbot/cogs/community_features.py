@@ -141,9 +141,10 @@ def _replace_vars(
     member: discord.Member | None = None,
     guild: discord.Guild | None = None,
     inviter: discord.User | discord.Member | None = None,
-    mention_channel: discord.abc.GuildChannel | None = None,
     mode: str = "message",
     leave_reason: str | None = None,
+    mention_channel: discord.abc.GuildChannel | None = None,
+    mention_channel_name: str = "",
 ) -> str:
     t = str(template or "")
     display_user = ""
@@ -156,23 +157,29 @@ def _replace_vars(
     server_name = guild.name if guild else ""
     inviter_mention = inviter.mention if inviter else "알 수 없음"
     inviter_name = getattr(inviter, "display_name", None) or getattr(inviter, "name", None) or "알 수 없음"
-    mention_channel_name = getattr(mention_channel, "name", "") if mention_channel else ""
-    mention_channel_value = (
-        mention_channel.mention
-        if mention_channel is not None and mode == "message"
-        else (f"#{mention_channel_name}" if mention_channel_name else "")
-    )
+    channel_value = ""
+    if mode == "message":
+        if mention_channel is not None:
+            channel_value = mention_channel.mention
+    else:
+        if mention_channel_name:
+            channel_value = f"#{mention_channel_name}"
+        elif mention_channel is not None:
+            cname = str(getattr(mention_channel, "name", "") or "").strip()
+            channel_value = f"#{cname}" if cname else ""
+
     mapping = {
         "[user]": mention_user if mode == "message" else display_user,
         "[server]": server_name,
         "[inviter]": inviter_mention if mode == "message" else inviter_name,
         "[discord]": discord_id,
         "[reason]": str(leave_reason or ""),
-        "[channel]": mention_channel_value,
+        "[channel]": channel_value,
     }
     for k, v in mapping.items():
         t = t.replace(k, v)
     return t
+
 
 
 class CommunityFeaturesCog(commands.Cog):
@@ -277,12 +284,7 @@ class CommunityFeaturesCog(commands.Cog):
             return None
 
     async def _build_welcome_image_bytes(
-        self,
-        member: discord.Member,
-        guild: discord.Guild,
-        settings: dict,
-        inviter,
-        mention_channel: discord.abc.GuildChannel | None = None,
+        self, member: discord.Member, guild: discord.Guild, settings: dict, inviter
     ) -> bytes | None:
         bg_url = str(settings.get("welcome_background_url") or "").strip()
         if not bg_url:
@@ -340,14 +342,18 @@ class CommunityFeaturesCog(commands.Cog):
             )
 
             draw = ImageDraw.Draw(canvas)
+            mention_channel_id = int(settings.get("welcome_message_channel_id") or 0)
+            mention_channel = guild.get_channel(mention_channel_id) if mention_channel_id > 0 else None
+            mention_channel_name = getattr(mention_channel, "name", "") if mention_channel is not None else ""
             for layer in _iter_text_layers():
                 rendered = _replace_vars(
                     str(layer["template"]),
                     member=member,
                     guild=guild,
                     inviter=inviter,
-                    mention_channel=mention_channel,
                     mode="image",
+                    mention_channel=mention_channel,
+                    mention_channel_name=mention_channel_name,
                 )
                 font = _safe_font(str(layer["font_name"]), int(layer["font_size"]))
                 lines = _wrap_text_lines(draw, rendered, font, int(layer["box_width"]))
@@ -400,10 +406,11 @@ class CommunityFeaturesCog(commands.Cog):
             return
 
         inviter = await self._detect_used_inviter(guild) if kind == "welcome" else None
-        mention_channel_setting_key = "welcome_message_channel_id" if kind == "welcome" else "goodbye_message_channel_id"
-        mention_channel_id = int(settings.get(mention_channel_setting_key) or 0)
-        mention_channel = await self._resolve_text_channel(guild, mention_channel_id) if mention_channel_id > 0 else None
-
+        mention_channel_id = int(
+            settings.get("welcome_message_channel_id" if kind == "welcome" else "goodbye_message_channel_id") or 0
+        )
+        mention_channel = guild.get_channel(mention_channel_id) if mention_channel_id > 0 else None
+        mention_channel_name = getattr(mention_channel, "name", "") if mention_channel is not None else ""
         template = str(
             settings.get("welcome_message_template" if kind == "welcome" else "goodbye_message_template") or ""
         )
@@ -412,14 +419,15 @@ class CommunityFeaturesCog(commands.Cog):
             member=member,
             guild=guild,
             inviter=inviter,
-            mention_channel=mention_channel,
             mode="message",
             leave_reason=leave_reason,
+            mention_channel=mention_channel,
+            mention_channel_name=mention_channel_name,
         )
 
         file = None
         if kind == "welcome" and bool(settings.get("welcome_image_enabled", False)):
-            raw = await self._build_welcome_image_bytes(member, guild, settings, inviter, mention_channel)
+            raw = await self._build_welcome_image_bytes(member, guild, settings, inviter)
             if raw:
                 file = discord.File(io.BytesIO(raw), filename="welcome.png")
             else:

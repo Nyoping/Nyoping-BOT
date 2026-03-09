@@ -22,9 +22,8 @@
     h1,h2{margin:0 0 10px}
     a{color:#93c5fd}
     label{display:block;font-size:13px;color:#a5b4fc;margin-top:10px}
-    input,select,textarea,button{font-size:14px}
-    input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb}
-    textarea{min-height:96px;resize:vertical;line-height:1.5}
+    input,select,button{font-size:14px}
+    input,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb}
     button{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:white;cursor:pointer}
     .row{display:flex;gap:12px;align-items:center}
     .col{flex:1}
@@ -125,7 +124,6 @@
   <div class="card admin-pane active" id="pane-settings">
         <form method="post" action="/admin/save-settings" id="settingsForm">
       <input type="hidden" name="guild_id" value="{{ guild_id }}">
-      <input type="hidden" name="guild_name" value="{{ guild_name or '' }}">
       <div id="settings-group-level" class="settings-group active">
       <div class="row">
         <div class="col">
@@ -224,47 +222,46 @@
 </div>
 
 <label>환영 메시지 템플릿</label>
-<textarea name="welcome_message_template" placeholder="여러 줄로 입력할 수 있어요.">{{ settings.welcome_message_template or '환영합니다 [user]!' }}</textarea>
+<textarea name="welcome_message_template" rows="4" placeholder="여러 줄 입력 가능">{{ settings.welcome_message_template or '환영합니다 [user]!' }}</textarea>
+
 <div class="row">
   <div class="col">
     <label>환영 메시지용 채널 멘션</label>
-    {% set _wmc = settings.welcome_message_channel_id|string if settings and settings.welcome_message_channel_id is not none else '' %}
+    {% set _wmch = settings.welcome_message_channel_id|string if settings and settings.welcome_message_channel_id is not none else '' %}
     {% if text_channels and text_channels|length > 0 %}
       <select name="welcome_message_channel_id" id="welcomeMessageChannelSelect">
         <option value="">선택 안 함</option>
         {% for c in text_channels %}
-          {% if c.channel_type != 4 %}
-          <option value="{{ c.channel_id }}" {% if _wmc == (c.channel_id|string) %}selected{% endif %}>{{ c.channel_name }} · {{ c.channel_id }}</option>
-          {% endif %}
+          <option value="{{ c.channel_id }}" {% if _wmch == (c.channel_id|string) %}selected{% endif %}>{{ c.channel_name }} · {{ c.channel_id }}</option>
         {% endfor %}
       </select>
     {% else %}
-      <input name="welcome_message_channel_id" value="{{ settings.welcome_message_channel_id or '' }}" placeholder="멘션할 채널 ID">
+      <input name="welcome_message_channel_id" value="{{ settings.welcome_message_channel_id or '' }}" placeholder="예: 1234567890">
     {% endif %}
   </div>
 </div>
 
 <label>퇴장 메시지 템플릿</label>
-<textarea name="goodbye_message_template" placeholder="여러 줄로 입력할 수 있어요.">{{ settings.goodbye_message_template or '[user] 님이 서버를 떠났습니다. [reason]' }}</textarea>
+<textarea name="goodbye_message_template" rows="4" placeholder="여러 줄 입력 가능">{{ settings.goodbye_message_template or '[user] 님이 서버를 떠났습니다. [reason]' }}</textarea>
+
 <div class="row">
   <div class="col">
     <label>퇴장 메시지용 채널 멘션</label>
-    {% set _gmc = settings.goodbye_message_channel_id|string if settings and settings.goodbye_message_channel_id is not none else '' %}
+    {% set _gmch = settings.goodbye_message_channel_id|string if settings and settings.goodbye_message_channel_id is not none else '' %}
     {% if text_channels and text_channels|length > 0 %}
       <select name="goodbye_message_channel_id" id="goodbyeMessageChannelSelect">
         <option value="">선택 안 함</option>
         {% for c in text_channels %}
-          {% if c.channel_type != 4 %}
-          <option value="{{ c.channel_id }}" {% if _gmc == (c.channel_id|string) %}selected{% endif %}>{{ c.channel_name }} · {{ c.channel_id }}</option>
-          {% endif %}
+          <option value="{{ c.channel_id }}" {% if _gmch == (c.channel_id|string) %}selected{% endif %}>{{ c.channel_name }} · {{ c.channel_id }}</option>
         {% endfor %}
       </select>
     {% else %}
-      <input name="goodbye_message_channel_id" value="{{ settings.goodbye_message_channel_id or '' }}" placeholder="멘션할 채널 ID">
+      <input name="goodbye_message_channel_id" value="{{ settings.goodbye_message_channel_id or '' }}" placeholder="예: 1234567890">
     {% endif %}
   </div>
 </div>
-<div class="small">사용 가능 변수: [user] [server] [inviter] [discord] [reason] [channel]<br>줄바꿈은 Enter로 입력하면 그대로 전송돼요. [channel]은 위에서 고른 채널 멘션으로 들어가요.</div>
+
+<div class="small">사용 가능 변수: [user] [server] [inviter] [discord] [reason] [channel]</div>
 
 <div class="row">
   <div class="col">
@@ -1452,24 +1449,25 @@ const previewState = window.previewState;
 function selectedChannelPreviewName(selectName){
   const el = settingsInput(selectName);
   if (!el) return '';
-  const opt = el.options?.[el.selectedIndex];
-  if (!opt || !opt.value) return '';
-  const label = String(opt.textContent || '').split('·')[0].trim();
-  return label || '';
+  if (el.tagName === 'SELECT') {
+    const opt = el.options[el.selectedIndex];
+    const raw = opt ? String(opt.textContent || '') : '';
+    const name = raw.split('·')[0].trim();
+    return name ? ('#' + name) : '';
+  }
+  const raw = String(el.value || '').trim();
+  return raw ? ('<#' + raw + '>') : '';
 }
 function applyPreviewVars(text){
   let out = String(text || '');
   const m = previewState.member || {};
   const rep = {
     '[user]': normalizeMemberDisplay(m),
-    '[server]': getWelcomeText('guild_name','{{ guild_name or "" }}'),
+    '[server]': '{{ guild_name or "" }}',
     '[discord]': String(m.user_id || ''),
     '[inviter]': '@inviter',
     '[reason]': '',
-    '[channel]': (() => {
-      const label = selectedChannelPreviewName('welcome_message_channel_id');
-      return label ? `#${label}` : '';
-    })(),
+    '[channel]': selectedChannelPreviewName('welcome_message_channel_id'),
   };
   Object.entries(rep).forEach(([k,v]) => { out = out.split(k).join(v); });
   return out;

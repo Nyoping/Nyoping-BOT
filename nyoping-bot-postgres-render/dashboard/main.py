@@ -223,16 +223,19 @@ def _replace_vars_for_preview(
     display_name: str,
     guild_name: str,
     mention_channel_name: str = "",
+    mention_channel_id: int = 0,
+    channel_mode: str = "preview",
 ) -> str:
     text = str(template or "")
     channel_name = str(mention_channel_name or "").strip()
+    use_channel_mention = str(channel_mode or "preview").lower() == "message" and int(mention_channel_id or 0) > 0
     rep = {
         "[user]": str(display_name or f"유저{int(user_id)}"),
-        "[server]": guild_name,
+        "[server]": str(guild_name or ""),
         "[inviter]": "초대한사람",
         "[discord]": str(int(user_id)),
         "[reason]": "",
-        "[channel]": f"#{channel_name}" if channel_name else "",
+        "[channel]": f"<#{int(mention_channel_id)}>" if use_channel_mention else (f"#{channel_name}" if channel_name else ""),
     }
     for k, v in rep.items():
         text = text.replace(k, v)
@@ -268,7 +271,14 @@ def _pick_text_layers_from_form(form: dict[str, Any]) -> list[dict[str, Any]]:
         })
     return layers
 
-async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: dict[str, Any], guild_name: str, mention_channel_name: str = "") -> bytes | None:
+async def _build_test_welcome_image_bytes(
+    pool,
+    form: dict[str, Any],
+    member: dict[str, Any],
+    guild_name: str,
+    mention_channel_name: str = "",
+    mention_channel_id: int = 0,
+) -> bytes | None:
     bg_url = str(form.get("welcome_background_url") or "").strip()
     if not bg_url:
         return None
@@ -310,6 +320,8 @@ async def _build_test_welcome_image_bytes(pool, form: dict[str, Any], member: di
             display_name=display_name,
             guild_name=guild_name,
             mention_channel_name=mention_channel_name,
+            mention_channel_id=mention_channel_id,
+            channel_mode="preview",
         )
         # 사용자가 고른 폰트를 우선 사용하고, 해당 폰트에 없는 글리프만 _safe_font의 fallback 체인으로 처리
         font = _safe_font(str(layer["font_name"]), layer["font_size"])
@@ -350,28 +362,82 @@ async def _pick_preview_member(pool: asyncpg.Pool, guild_id: int, user_id: str |
         )
     return dict(row) if row else None
 
+def _is_placeholder_guild_name(value: str, guild_id: int) -> bool:
+    name = str(value or "").strip()
+    if not name:
+        return True
+    if name == str(int(guild_id)):
+        return True
+    if name == f"서버 {int(guild_id)}":
+        return True
+    if name.isdigit():
+        return True
+    return False
+
 async def _guild_name(pool: asyncpg.Pool, guild_id: int) -> str:
+    cached_name = ""
     try:
         name = await pool.fetchval("SELECT guild_name FROM guilds_cache WHERE guild_id=$1", int(guild_id))
         if name:
-            return str(name)
+            cached_name = str(name).strip()
     except Exception:
-        pass
-    return f"서버 {guild_id}"
+        cached_name = ""
+
+    if not _is_placeholder_guild_name(cached_name, guild_id):
+        return cached_name
+
+    token = _discord_bot_token()
+    if token:
+        try:
+            resp = requests.get(
+                f"https://discord.com/api/v10/guilds/{int(guild_id)}",
+                headers={"Authorization": f"Bot {token}"},
+                timeout=10,
+            )
+            if 200 <= resp.status_code < 300:
+                data = resp.json() or {}
+                live_name = str(data.get("name") or "").strip()
+                if not _is_placeholder_guild_name(live_name, guild_id):
+                    return live_name
+        except Exception:
+            log.exception("guild name lookup failed guild=%s", guild_id)
+
+    return cached_name or f"서버 {guild_id}"
 
 async def _channel_name(pool: asyncpg.Pool, guild_id: int, channel_id: int) -> str:
     if int(channel_id or 0) <= 0:
         return ""
+
+    cached_name = ""
     try:
-        name = await pool.fetchval(
-            "SELECT channel_name FROM guild_channels_cache WHERE guild_id=$1 AND channel_id=$2",
-            int(guild_id),
-            int(channel_id),
-        )
-        if name:
-            return str(name)
+        cached_name = str(
+            await pool.fetchval(
+                "SELECT channel_name FROM guild_channels_cache WHERE guild_id=$1 AND channel_id=$2",
+                int(guild_id),
+                int(channel_id),
+            ) or ""
+        ).strip()
     except Exception:
-        pass
+        cached_name = ""
+
+    if cached_name:
+        return cached_name
+
+    token = _discord_bot_token()
+    if token:
+        try:
+            resp = requests.get(
+                f"https://discord.com/api/v10/channels/{int(channel_id)}",
+                headers={"Authorization": f"Bot {token}"},
+                timeout=10,
+            )
+            if 200 <= resp.status_code < 300:
+                data = resp.json() or {}
+                if int(data.get("guild_id") or 0) == int(guild_id):
+                    return str(data.get("name") or "").strip()
+        except Exception:
+            log.exception("channel name lookup failed guild=%s channel=%s", guild_id, channel_id)
+
     return ""
 
 def _discord_bot_token() -> str:
@@ -1051,9 +1117,10 @@ async def test_welcome_message(request: Request):
         return JSONResponse({"ok": False, "error": "member_not_found", "message": "테스트에 사용할 유저를 찾지 못했어요."}, status_code=404)
 
     raw_form_guild_name = str(form.get("guild_name") or "").strip()
-    guild_name = raw_form_guild_name or await _guild_name(pool, guild_id)
-    if guild_name in {str(guild_id), f"서버 {guild_id}"}:
-        guild_name = raw_form_guild_name or guild_name
+    if _is_placeholder_guild_name(raw_form_guild_name, guild_id):
+        guild_name = await _guild_name(pool, guild_id)
+    else:
+        guild_name = raw_form_guild_name
 
     mention_channel_id = _to_int(form.get("welcome_message_channel_id"), 0)
     mention_channel_name = await _channel_name(pool, guild_id, mention_channel_id)
@@ -1064,6 +1131,8 @@ async def test_welcome_message(request: Request):
         display_name=display_name,
         guild_name=guild_name,
         mention_channel_name=mention_channel_name,
+        mention_channel_id=mention_channel_id,
+        channel_mode="message",
     )
     url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
     headers = {"Authorization": f"Bot {token}"}
@@ -1073,7 +1142,14 @@ async def test_welcome_message(request: Request):
         image_warning = None
         if _to_bool(form.get("welcome_image_enabled")):
             try:
-                image_bytes = await _build_test_welcome_image_bytes(pool, form, member, guild_name, mention_channel_name)
+                image_bytes = await _build_test_welcome_image_bytes(
+                    pool,
+                    form,
+                    member,
+                    guild_name,
+                    mention_channel_name=mention_channel_name,
+                    mention_channel_id=mention_channel_id,
+                )
                 if not image_bytes:
                     image_warning = "사진을 만들지 못해서 텍스트만 보냈어요."
             except Exception:
