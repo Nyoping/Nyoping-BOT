@@ -175,6 +175,40 @@ def _oauth_guilds(request: Request) -> list[dict[str, Any]]:
     return items if isinstance(items, list) else []
 
 
+def _compact_oauth_guilds(items: Any) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    if not isinstance(items, list):
+        return compact
+    seen: set[int] = set()
+    manage_mask = _manage_guild_permissions_mask()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            gid = int(item.get("id") or item.get("guild_id") or 0)
+        except Exception:
+            gid = 0
+        if gid <= 0 or gid in seen:
+            continue
+        try:
+            raw_perm = item.get("permissions")
+            if raw_perm is None:
+                raw_perm = item.get("permissions_new")
+            perms = int(str(raw_perm or 0))
+        except Exception:
+            perms = 0
+        if not (perms & manage_mask):
+            continue
+        seen.add(gid)
+        compact.append({
+            "id": str(gid),
+            "name": str(item.get("name") or item.get("guild_name") or "").strip(),
+            "permissions": str(perms),
+        })
+    compact.sort(key=lambda x: (str(x.get("name") or "").lower(), int(x.get("id") or 0)))
+    return compact
+
+
 def _has_dashboard_access(request: Request) -> bool:
     return bool(_require_admin(request) or _oauth_user(request))
 
@@ -1524,14 +1558,23 @@ async def _finish_discord_oauth(request: Request, code: str = "", state: str = "
         log.exception("discord oauth user/guild fetch failed")
         return RedirectResponse(url="/?msg=" + quote_plus("Discord 서버 목록을 불러오지 못했어요."), status_code=302)
 
-    request.session["oauth_access_token"] = access_token
+    compact_guilds = _compact_oauth_guilds(guilds)
     request.session["oauth_user"] = {
         "id": str(user.get("id") or ""),
         "username": str(user.get("username") or ""),
         "global_name": str(user.get("global_name") or ""),
         "avatar": str(user.get("avatar") or ""),
     }
-    request.session["oauth_guilds"] = guilds if isinstance(guilds, list) else []
+    request.session["oauth_guilds"] = compact_guilds
+    request.session.pop("oauth_access_token", None)
+    try:
+        approx_session_size = len(json.dumps({
+            "oauth_user": request.session.get("oauth_user") or {},
+            "oauth_guilds": request.session.get("oauth_guilds") or [],
+        }, ensure_ascii=False))
+        log.info("discord oauth session saved: guilds=%s approx_bytes=%s", len(compact_guilds), approx_session_size)
+    except Exception:
+        pass
     return RedirectResponse(url=next_url, status_code=302)
 
 
