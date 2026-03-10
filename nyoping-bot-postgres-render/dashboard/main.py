@@ -1005,6 +1005,37 @@ def _safe_selected_guild_name(guilds: Sequence[Mapping[str, Any]], gid: int | No
             continue
     return str(gid)
 
+
+def _user_display_name_from_row(row: Mapping[str, Any] | None, fallback_user_id: int | None = None) -> str:
+    if not row:
+        return str(int(fallback_user_id)) if fallback_user_id else "알 수 없는 유저"
+    for key in ("display_name", "nick", "global_name", "username", "user_name", "member_name"):
+        try:
+            value = str(row.get(key) or "").strip()
+        except Exception:
+            value = ""
+        if value:
+            return value
+    try:
+        uid = int(row.get("user_id") or fallback_user_id or 0)
+    except Exception:
+        uid = int(fallback_user_id or 0)
+    return str(uid) if uid > 0 else "알 수 없는 유저"
+
+def _member_option_label(row: Mapping[str, Any]) -> str:
+    name = _user_display_name_from_row(row)
+    try:
+        uid = int(row.get("user_id") or 0)
+    except Exception:
+        uid = 0
+    return f"{name} · {uid}" if uid > 0 else name
+
+def _xp_to_level(xp: int | None) -> int:
+    try:
+        return max(0, int(xp or 0)) // 100
+    except Exception:
+        return 0
+
 def _textish_channels(channels: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """Best-effort filter for message-capable channels.
     Falls back to all channels if type info is missing.
@@ -1184,9 +1215,179 @@ async def shutdown():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request), "developer_name": _developer_name()})
+    return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request), "developer_name": _developer_name(), "support_server_url": _support_server_url()})
 
 
+
+
+
+@app.get("/user", response_class=HTMLResponse)
+async def user_page(
+    request: Request,
+    guild_id: str | None = None,
+    user_id: str | None = None,
+    rank_page: int = 1,
+):
+    pool = await _ensure_pool(app)
+    guilds = await _list_guilds_for_admin(pool)
+    gid = int(guild_id) if guild_id and str(guild_id).isdigit() else None
+    uid = int(user_id) if user_id and str(user_id).isdigit() else None
+
+    selected_guild_name = _safe_selected_guild_name(guilds, gid)
+    selected_member: dict[str, Any] | None = None
+    member_options: list[dict[str, Any]] = []
+    leaderboard_rows: list[dict[str, Any]] = []
+    profile: dict[str, Any] | None = None
+    total_members = 0
+    rank_page_size = 50
+    rp = max(1, int(rank_page or 1))
+    flash_msg = ""
+    flash_kind = "success"
+
+    if gid:
+        raw_members = await _fetch_optional(
+            pool,
+            """SELECT user_id, username, discriminator, global_name, nick, display_name, avatar_url, updated_at
+                 FROM guild_members_cache
+                 WHERE guild_id=$1 AND in_guild=TRUE
+                 ORDER BY updated_at DESC, user_id DESC
+                 LIMIT 400""",
+            gid,
+        )
+        for row in raw_members or []:
+            item = dict(row)
+            item["member_label"] = _member_option_label(item)
+            member_options.append(item)
+        member_options.sort(key=lambda x: str(x.get("member_label") or "").lower())
+
+        total_members = int(await _fetchval_optional(
+            pool,
+            "SELECT COUNT(*) FROM guild_members_cache WHERE guild_id=$1 AND in_guild=TRUE",
+            gid,
+            default=0,
+        ) or 0)
+
+        off = (rp - 1) * rank_page_size
+        leaderboard_raw = await _fetch_optional(
+            pool,
+            """SELECT m.user_id,
+                      COALESCE(s.xp,0) AS xp,
+                      m.display_name, m.nick, m.global_name, m.username, m.avatar_url
+               FROM guild_members_cache m
+               LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
+               WHERE m.guild_id=$1 AND m.in_guild=TRUE
+               ORDER BY COALESCE(s.xp,0) DESC, m.user_id
+               LIMIT $2 OFFSET $3""",
+            gid, rank_page_size, off,
+        )
+        start_rank = off + 1
+        for i, row in enumerate(leaderboard_raw or []):
+            item = dict(row)
+            item["rank"] = start_rank + i
+            item["member_name"] = _user_display_name_from_row(item)
+            item["level"] = _xp_to_level(item.get("xp"))
+            leaderboard_rows.append(item)
+
+        if uid:
+            member_row = await _fetchrow_optional(
+                pool,
+                """SELECT user_id, username, discriminator, global_name, nick, display_name, avatar_url, updated_at
+                     FROM guild_members_cache
+                     WHERE guild_id=$1 AND user_id=$2 AND in_guild=TRUE""",
+                gid, uid,
+            )
+            if member_row:
+                selected_member = dict(member_row)
+                xp = int(await _fetchval_optional(
+                    pool,
+                    "SELECT COALESCE(xp,0) FROM user_stats WHERE guild_id=$1 AND user_id=$2",
+                    gid, uid,
+                    default=0,
+                ) or 0)
+                checkin_count = int(await _fetchval_optional(
+                    pool,
+                    "SELECT COUNT(*) FROM checkins WHERE guild_id=$1 AND user_id=$2",
+                    gid, uid,
+                    default=0,
+                ) or 0)
+                streak_row = await _fetchrow_optional(
+                    pool,
+                    "SELECT last_ymd, streak FROM checkin_streaks WHERE guild_id=$1 AND user_id=$2",
+                    gid, uid,
+                )
+                voice_today = int(await _fetchval_optional(
+                    pool,
+                    "SELECT xp FROM voice_xp_daily WHERE guild_id=$1 AND user_id=$2 AND ymd=$3",
+                    gid, uid, kst_today_ymd(),
+                    default=0,
+                ) or 0)
+                rank_value = await _fetchval_optional(
+                    pool,
+                    """WITH me AS (
+                           SELECT m.user_id, COALESCE(s.xp, 0) AS xp
+                           FROM guild_members_cache m
+                           LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
+                           WHERE m.guild_id=$1 AND m.user_id=$2 AND m.in_guild=TRUE
+                       )
+                       SELECT CASE
+                           WHEN EXISTS(SELECT 1 FROM me) THEN
+                               1 + (
+                                   SELECT COUNT(*)
+                                   FROM guild_members_cache m
+                                   LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
+                                   CROSS JOIN me
+                                   WHERE m.guild_id=$1
+                                     AND m.in_guild=TRUE
+                                     AND (
+                                         COALESCE(s.xp, 0) > me.xp
+                                         OR (COALESCE(s.xp, 0) = me.xp AND m.user_id < me.user_id)
+                                     )
+                               )
+                           ELSE NULL
+                       END""",
+                    gid, uid,
+                    default=None,
+                )
+                selected_member["member_name"] = _user_display_name_from_row(selected_member, uid)
+                selected_member["member_label"] = _member_option_label(selected_member)
+                profile = {
+                    "user_id": uid,
+                    "member_name": selected_member["member_name"],
+                    "avatar_url": str(selected_member.get("avatar_url") or "").strip(),
+                    "xp": xp,
+                    "level": _xp_to_level(xp),
+                    "checkin_count": checkin_count,
+                    "streak": int((dict(streak_row).get("streak") if streak_row else 0) or 0),
+                    "streak_last_ymd": str((dict(streak_row).get("last_ymd") if streak_row else "") or ""),
+                    "voice_xp_today": voice_today,
+                    "rank": int(rank_value) if rank_value is not None else None,
+                    "rank_total": total_members,
+                }
+            else:
+                flash_msg = "선택한 유저를 이 서버의 현재 멤버 목록에서 찾지 못했어요."
+                flash_kind = "warning"
+
+    return TEMPLATES.TemplateResponse(
+        "user.html",
+        {
+            "request": request,
+            "guilds": guilds,
+            "guild_id": gid,
+            "user_id": uid,
+            "selected_guild_name": selected_guild_name,
+            "member_options": member_options,
+            "selected_member": selected_member,
+            "profile": profile,
+            "leaderboard_rows": leaderboard_rows,
+            "rank_page": rp,
+            "rank_total": total_members,
+            "rank_page_size": rank_page_size,
+            "flash_msg": flash_msg,
+            "flash_kind": flash_kind,
+            "developer_name": _developer_name(),
+            "support_server_url": _support_server_url(),
+        },
+    )
 
 
 @app.get("/assets/images/support-server-banner.png")

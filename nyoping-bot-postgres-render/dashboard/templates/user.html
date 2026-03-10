@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>뇨핑봇 사용자 페이지</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;margin:0;background:#0b1220;color:#e5e7eb}
+    .wrap{max-width:1240px;margin:0 auto;padding:24px}
+    .hero{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end}
+    .sub{color:#94a3b8;font-size:14px}
+    .card{background:#111a2e;border:1px solid #1f2a44;border-radius:16px;padding:18px;margin-top:14px;box-shadow:0 14px 34px rgba(0,0,0,.18)}
+    .grid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:18px;align-items:start}
+    .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+    .stat{background:#0b1220;border:1px solid #233150;border-radius:14px;padding:14px}
+    .value{font-size:22px;font-weight:800;margin-top:6px}
+    .label{font-size:12px;color:#94a3b8}
+    .muted{color:#9ca3af;font-size:13px;line-height:1.6}
+    h1,h2,h3{margin:0 0 8px}
+    label{display:block;font-size:13px;color:#a5b4fc;margin-top:10px}
+    input,select,button{font-size:14px}
+    input,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb}
+    button,.btn{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:white;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+    .btn.secondary{background:#334155}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .flash{border-radius:12px;padding:12px 14px;margin-top:14px;border:1px solid}
+    .flash.warning{background:#3a2914;border-color:#7c5e1d;color:#fde68a}
+    .table{width:100%;border-collapse:collapse}
+    .table th,.table td{padding:10px 8px;border-bottom:1px solid #1f2a44;font-size:14px;text-align:left;vertical-align:top}
+    .table th{color:#93c5fd;font-weight:700}
+    .avatar{width:64px;height:64px;border-radius:50%;object-fit:cover;border:1px solid #334155;background:#0b1220}
+    .pager{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>👤 뇨핑봇 사용자 페이지</h1>
+        <div class="sub">관리자 비밀번호 없이 공개 정보만 조회할 수 있어요.</div>
+      </div>
+      <div class="row">
+        <a href="/" class="btn secondary">처음으로</a>
+        <a href="{{ support_server_url }}" class="btn secondary" target="_blank" rel="noopener">지원 서버</a>
+      </div>
+    </div>
+
+    {% if flash_msg %}
+    <div class="flash {{ flash_kind }}">{{ flash_msg }}</div>
+    {% endif %}
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h2>조회할 서버/유저 선택</h2>
+          <form method="get" action="/user">
+            <label>서버 선택</label>
+            <select name="guild_id" required onchange="this.form.submit()">
+              <option value="">서버를 선택하세요</option>
+              {% for g in guilds %}
+              <option value="{{ g.guild_id }}" {% if guild_id and g.guild_id == guild_id %}selected{% endif %}>
+                {{ (g.guild_name or g.guild_id) }} · {{ g.guild_id }}
+              </option>
+              {% endfor %}
+            </select>
+
+            {% if guild_id %}
+            <label>유저 선택</label>
+            <select name="user_id">
+              <option value="">유저를 선택하세요</option>
+              {% for m in member_options %}
+              <option value="{{ m.user_id }}" {% if user_id and m.user_id == user_id %}selected{% endif %}>
+                {{ m.member_label }}
+              </option>
+              {% endfor %}
+            </select>
+            {% endif %}
+
+            <div class="row" style="margin-top:14px">
+              <button type="submit">조회하기</button>
+              {% if guild_id %}
+              <a class="btn secondary" href="/user?guild_id={{ guild_id }}">선택 초기화</a>
+              {% endif %}
+            </div>
+          </form>
+          <div class="muted" style="margin-top:12px">
+            현재 페이지에서는 서버 설정을 바꿀 수 없고, 프로필/랭킹 같은 공개 정보만 볼 수 있어요.
+          </div>
+        </div>
+
+        {% if profile %}
+        <div class="card">
+          <h2>선택한 유저 정보</h2>
+          <div class="row" style="align-items:center;margin-top:8px">
+            {% if profile.avatar_url %}
+            <img src="{{ profile.avatar_url }}" alt="avatar" class="avatar">
+            {% else %}
+            <div class="avatar"></div>
+            {% endif %}
+            <div>
+              <div style="font-size:20px;font-weight:800">{{ profile.member_name }}</div>
+              <div class="muted">유저 ID · {{ profile.user_id }}</div>
+              {% if profile.rank %}
+              <div class="muted">현재 랭킹 {{ profile.rank }}위 / {{ profile.rank_total }}명</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="grid2" style="margin-top:14px">
+            <div class="stat">
+              <div class="label">XP</div>
+              <div class="value">{{ profile.xp }}</div>
+            </div>
+            <div class="stat">
+              <div class="label">레벨</div>
+              <div class="value">Lv.{{ profile.level }}</div>
+            </div>
+            <div class="stat">
+              <div class="label">출석 횟수</div>
+              <div class="value">{{ profile.checkin_count }}</div>
+            </div>
+            <div class="stat">
+              <div class="label">연속 출석</div>
+              <div class="value">{{ profile.streak }}일</div>
+            </div>
+            <div class="stat">
+              <div class="label">오늘 통화 XP</div>
+              <div class="value">{{ profile.voice_xp_today }}</div>
+            </div>
+            <div class="stat">
+              <div class="label">현재 랭킹</div>
+              <div class="value">{% if profile.rank %}{{ profile.rank }}위{% else %}-{% endif %}</div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      <div>
+        <div class="card">
+          <h2>서버 랭킹</h2>
+          {% if guild_id %}
+          <div class="muted">{{ selected_guild_name }} 서버 기준 상위 랭킹이에요.</div>
+          {% else %}
+          <div class="muted">먼저 서버를 선택하면 랭킹과 프로필을 볼 수 있어요.</div>
+          {% endif %}
+
+          {% if leaderboard_rows %}
+          <table class="table" style="margin-top:12px">
+            <thead>
+              <tr>
+                <th style="width:90px">등수</th>
+                <th>유저</th>
+                <th style="width:130px">레벨</th>
+                <th style="width:140px">XP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in leaderboard_rows %}
+              <tr>
+                <td>#{{ row.rank }}</td>
+                <td>
+                  <div style="font-weight:700">{{ row.member_name }}</div>
+                  <div class="muted">{{ row.user_id }}</div>
+                </td>
+                <td>Lv.{{ row.level }}</td>
+                <td>{{ row.xp }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          <div class="pager">
+            <div class="muted">전체 {{ rank_total }}명</div>
+            <div class="row">
+              {% set prev_page = rank_page - 1 %}
+              {% set next_page = rank_page + 1 %}
+              {% if rank_page > 1 %}
+              <a class="btn secondary" href="/user?guild_id={{ guild_id }}{% if user_id %}&user_id={{ user_id }}{% endif %}&rank_page={{ prev_page }}">이전</a>
+              {% endif %}
+              {% if rank_page * rank_page_size < rank_total %}
+              <a class="btn secondary" href="/user?guild_id={{ guild_id }}{% if user_id %}&user_id={{ user_id }}{% endif %}&rank_page={{ next_page }}">다음</a>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="card">
+          <h3>개발자</h3>
+          <div style="font-weight:700">뇨핑 nyoping</div>
+          <div class="muted" style="margin-top:8px">지원겸 종합게임 서버</div>
+          <a href="{{ support_server_url }}" target="_blank" rel="noopener" style="color:#93c5fd;text-decoration:none">{{ support_server_url }}</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
