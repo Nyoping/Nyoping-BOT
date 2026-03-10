@@ -132,7 +132,16 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🧊 뇨핑봇 관리자</h1>
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+  <h1 style="margin:0">🧊 뇨핑봇 관리자</h1>
+  <div class="small">
+    {% if oauth_user and oauth_user.username %}
+      Discord 로그인: <b>{{ oauth_user.global_name or oauth_user.username }}</b> · <a href="/logout/discord" style="color:#93c5fd;text-decoration:none">로그아웃</a>
+    {% elif oauth_enabled %}
+      <a href="/login/discord?next=/admin" style="color:#93c5fd;text-decoration:none">Discord로 로그인</a>
+    {% endif %}
+  </div>
+</div>
 
   {% if msg %}
     <div class="msg flash {{ flash_kind or 'success' }}">
@@ -172,7 +181,7 @@
             <option value="{{ g.guild_id }}" {% if (guild_id|string) == (g.guild_id|string) %}selected{% endif %}>{{ _gname if _gname else ('서버 ' ~ g.guild_id) }} · {{ g.guild_id }}</option>
           {% endfor %}
         </select>
-        {% if not guilds or guilds|length == 0 %}<div class="small" style="margin-top:6px;color:#fca5a5">서버 목록이 비어 있어요. 봇이 DB 캐시를 한 번 이상 동기화할 때까지 잠시 기다린 뒤 새로고침해 보세요.</div>{% endif %}
+        {% if not guilds or guilds|length == 0 %}<div class="small" style="margin-top:6px;color:#fca5a5">서버 목록이 비어 있어요. Discord 로그인 상태와 서버 관리 권한을 확인한 뒤 새로고침해 보세요.</div>{% endif %}
         <div class="small">목록에 없으면 아직 그 서버에 봇이 들어오지 않은 상태일 수 있어요. 아래 초대 버튼으로 먼저 서버에 봇을 추가한 뒤 다시 들어오세요.</div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">

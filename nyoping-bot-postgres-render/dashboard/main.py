@@ -9,7 +9,7 @@ import json
 import uuid
 import logging
 from typing import Any, Mapping, Sequence
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus
 
 import asyncpg
 import requests
@@ -134,7 +134,7 @@ def _discord_install_url(*, guild_id: int | None = None, lock_guild: bool = Fals
     application_id = _discord_application_id()
     if not application_id:
         return ""
-    from urllib.parse import urlencode
+    from urllib.parse import urlencode, quote_plus
 
     params: dict[str, str] = {
         "client_id": application_id,
@@ -146,6 +146,150 @@ def _discord_install_url(*, guild_id: int | None = None, lock_guild: bool = Fals
         if lock_guild:
             params["disable_guild_select"] = "true"
     return "https://discord.com/oauth2/authorize?" + urlencode(params)
+
+
+def _discord_client_secret() -> str:
+    return _env("DISCORD_CLIENT_SECRET").strip()
+
+
+def _discord_oauth_redirect_uri() -> str:
+    return (_env("DISCORD_OAUTH_REDIRECT_URI") or _env("DISCORD_REDIRECT_URI")).strip()
+
+
+def _discord_oauth_enabled() -> bool:
+    disabled = _env("DISABLE_DISCORD_OAUTH", "").strip().lower() in {"1", "true", "yes", "on"}
+    return (not disabled) and bool(_discord_application_id() and _discord_client_secret() and _discord_oauth_redirect_uri())
+
+
+def _oauth_scopes() -> str:
+    return "identify guilds"
+
+
+def _oauth_user(request: Request) -> dict[str, Any]:
+    data = request.session.get("oauth_user") or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _oauth_guilds(request: Request) -> list[dict[str, Any]]:
+    items = request.session.get("oauth_guilds") or []
+    return items if isinstance(items, list) else []
+
+
+def _has_dashboard_access(request: Request) -> bool:
+    return bool(_require_admin(request) or _oauth_user(request))
+
+
+def _manage_guild_permissions_mask() -> int:
+    return (1 << 3) | (1 << 5)
+
+
+def _manageable_oauth_guilds(request: Request) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in _oauth_guilds(request):
+        try:
+            raw_perm = item.get("permissions")
+            if raw_perm is None:
+                raw_perm = item.get("permissions_new")
+            perms = int(str(raw_perm or 0))
+        except Exception:
+            perms = 0
+        if perms & _manage_guild_permissions_mask():
+            out.append(item)
+    return out
+
+
+def _request_accessible_guild_ids(request: Request) -> set[int]:
+    if _require_admin(request):
+        return set()
+    out: set[int] = set()
+    for item in _manageable_oauth_guilds(request):
+        try:
+            gid = int(item.get("id") or item.get("guild_id") or 0)
+        except Exception:
+            gid = 0
+        if gid > 0:
+            out.add(gid)
+    return out
+
+
+def _request_can_access_guild(request: Request, guild_id: int) -> bool:
+    try:
+        gid = int(guild_id or 0)
+    except Exception:
+        gid = 0
+    if gid <= 0:
+        return False
+    if _require_admin(request):
+        return True
+    return gid in _request_accessible_guild_ids(request)
+
+
+def _dashboard_entry_url() -> str:
+    return "/login/discord?next=/admin" if _discord_oauth_enabled() else "/admin"
+
+
+def _discord_oauth_authorize_url(*, state: str) -> str:
+    params = {
+        "client_id": _discord_application_id(),
+        "response_type": "code",
+        "redirect_uri": _discord_oauth_redirect_uri(),
+        "scope": _oauth_scopes(),
+        "state": state,
+    }
+    return "https://discord.com/oauth2/authorize?" + urlencode(params)
+
+
+def _sanitize_next_url(value: str | None) -> str:
+    t = str(value or "").strip()
+    if not t.startswith("/"):
+        return "/admin"
+    if t.startswith("//"):
+        return "/admin"
+    return t or "/admin"
+
+
+def _discord_user_api_get(path: str, *, access_token: str, timeout: int = 12) -> Any:
+    resp = requests.get(
+        f"https://discord.com/api/v10{path}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=timeout,
+    )
+    if not (200 <= resp.status_code < 300):
+        raise RuntimeError(f"Discord OAuth API {path} failed: HTTP {resp.status_code}")
+    return resp.json()
+
+
+async def _list_guilds_for_request(pool: asyncpg.Pool, request: Request) -> list[dict[str, Any]]:
+    if _require_admin(request):
+        return await _list_guilds_for_admin(pool)
+
+    out: list[dict[str, Any]] = []
+    for item in _manageable_oauth_guilds(request):
+        try:
+            gid = int(item.get("id") or item.get("guild_id") or 0)
+        except Exception:
+            continue
+        if gid <= 0:
+            continue
+        oauth_name = str(item.get("name") or item.get("guild_name") or "").strip()
+        known, known_name = await _guild_known_to_dashboard(pool, gid)
+        out.append({
+            "guild_id": gid,
+            "guild_name": (known_name or oauth_name or f"서버 {gid}"),
+            "bot_connected": bool(known),
+        })
+
+    dedup: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for item in out:
+        gid = int(item.get("guild_id") or 0)
+        if gid <= 0 or gid in seen:
+            continue
+        seen.add(gid)
+        dedup.append(item)
+
+    dedup.sort(key=lambda x: (str(x.get("guild_name") or "").lower(), int(x.get("guild_id") or 0)))
+    return dedup
 
 async def _guild_known_to_dashboard(pool: asyncpg.Pool, guild_id: int) -> tuple[bool, str]:
     gid = int(guild_id)
@@ -1317,7 +1461,95 @@ async def shutdown():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request), "developer_name": _developer_name(), "support_server_url": _support_server_url(), "invite_url": _discord_install_url(), "discord_application_id": _discord_application_id()})
+    return TEMPLATES.TemplateResponse("index.html", {
+        "request": request,
+        "admin_ok": _require_admin(request),
+        "oauth_enabled": _discord_oauth_enabled(),
+        "oauth_user": _oauth_user(request),
+        "dashboard_entry_url": _dashboard_entry_url(),
+        "developer_name": _developer_name(),
+        "support_server_url": _support_server_url(),
+        "invite_url": _discord_install_url(),
+        "discord_application_id": _discord_application_id(),
+    })
+
+
+@app.get("/login/discord")
+async def login_discord(request: Request, next: str = "/admin"):
+    if not _discord_oauth_enabled():
+        return RedirectResponse(url="/?msg=" + quote_plus("Discord 로그인 설정이 아직 완료되지 않았어요."), status_code=302)
+    state = uuid.uuid4().hex
+    request.session["oauth_state"] = state
+    request.session["oauth_next"] = _sanitize_next_url(next)
+    return RedirectResponse(url=_discord_oauth_authorize_url(state=state), status_code=302)
+
+
+async def _finish_discord_oauth(request: Request, code: str = "", state: str = "", error: str | None = None):
+    if error:
+        return RedirectResponse(url="/?msg=" + quote_plus("Discord 로그인 승인이 취소되었어요."), status_code=302)
+
+    expected_state = str(request.session.get("oauth_state") or "")
+    next_url = _sanitize_next_url(str(request.session.get("oauth_next") or "/admin"))
+    request.session.pop("oauth_state", None)
+    request.session.pop("oauth_next", None)
+
+    if not code or not state or state != expected_state:
+        return RedirectResponse(url="/?msg=" + quote_plus("Discord 로그인 상태 확인에 실패했어요."), status_code=302)
+
+    token_resp = requests.post(
+        "https://discord.com/api/v10/oauth2/token",
+        data={
+            "client_id": _discord_application_id(),
+            "client_secret": _discord_client_secret(),
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": _discord_oauth_redirect_uri(),
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=15,
+    )
+    if not (200 <= token_resp.status_code < 300):
+        log.warning("discord oauth token exchange failed: %s %s", token_resp.status_code, token_resp.text[:300])
+        return RedirectResponse(url="/?msg=" + quote_plus("Discord 로그인 토큰 교환에 실패했어요."), status_code=302)
+
+    token_data = token_resp.json() or {}
+    access_token = str(token_data.get("access_token") or "").strip()
+    if not access_token:
+        return RedirectResponse(url="/?msg=" + quote_plus("Discord 로그인 토큰을 받지 못했어요."), status_code=302)
+
+    try:
+        user = _discord_user_api_get("/users/@me", access_token=access_token, timeout=12)
+        guilds = _discord_user_api_get("/users/@me/guilds", access_token=access_token, timeout=15)
+    except Exception:
+        log.exception("discord oauth user/guild fetch failed")
+        return RedirectResponse(url="/?msg=" + quote_plus("Discord 서버 목록을 불러오지 못했어요."), status_code=302)
+
+    request.session["oauth_access_token"] = access_token
+    request.session["oauth_user"] = {
+        "id": str(user.get("id") or ""),
+        "username": str(user.get("username") or ""),
+        "global_name": str(user.get("global_name") or ""),
+        "avatar": str(user.get("avatar") or ""),
+    }
+    request.session["oauth_guilds"] = guilds if isinstance(guilds, list) else []
+    return RedirectResponse(url=next_url, status_code=302)
+
+
+@app.get("/oauth/discord/callback")
+async def discord_oauth_callback(request: Request, code: str = "", state: str = "", error: str | None = None):
+    return await _finish_discord_oauth(request, code=code, state=state, error=error)
+
+
+@app.get("/callback")
+async def discord_oauth_callback_alias(request: Request, code: str = "", state: str = "", error: str | None = None):
+    return await _finish_discord_oauth(request, code=code, state=state, error=error)
+
+
+@app.get("/logout/discord")
+async def logout_discord(request: Request):
+    for key in ["oauth_access_token", "oauth_user", "oauth_guilds", "oauth_state", "oauth_next"]:
+        request.session.pop(key, None)
+    return RedirectResponse(url="/", status_code=302)
 
 
 
@@ -1372,13 +1604,17 @@ async def admin_login(request: Request, password: str = Form(...)):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, guild_id: str | None = None, msg: str | None = None, kind: str | None = None, saved_at: str | None = None, rank_page: int = 1):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
+        if _discord_oauth_enabled():
+            return RedirectResponse(url="/login/discord?next=/admin", status_code=302)
         return RedirectResponse(url="/", status_code=302)
 
     pool = await _ensure_pool(app)
 
-    guilds = await _list_guilds_for_admin(pool)
+    guilds = await _list_guilds_for_request(pool, request)
     gid = int(guild_id) if guild_id and str(guild_id).isdigit() else None
+    if gid and not _request_can_access_guild(request, gid):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 설정에 접근할 권한이 없어요.") + "&kind=error", status_code=302)
     log.info("Admin page open guild_id=%s", gid)
     settings: dict[str, Any] | None = None
     roles = []
@@ -1559,6 +1795,9 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "discord_application_id": _discord_application_id(),
             "invite_url": _discord_install_url(),
             "selected_guild_invite_url": _discord_install_url(guild_id=gid, lock_guild=True) if gid else "",
+            "oauth_enabled": _discord_oauth_enabled(),
+            "oauth_user": _oauth_user(request),
+            "dashboard_entry_url": _dashboard_entry_url(),
         },
     )
 
@@ -1566,8 +1805,10 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
 
 @app.post("/admin/api/welcome-image-upload")
 async def api_welcome_image_upload(request: Request, guild_id: int = Form(...), image: UploadFile = File(...)):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
     pool = await _ensure_pool(app)
     raw = await image.read()
     try:
@@ -1603,8 +1844,10 @@ async def media_get(media_id: str):
 
 @app.get("/admin/api/welcome-preview-member")
 async def api_welcome_preview_member(request: Request, guild_id: int, user_id: str | None = None):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
     pool = await _ensure_pool(app)
     row = None
     if user_id and str(user_id).isdigit():
@@ -1633,13 +1876,15 @@ async def api_welcome_preview_member(request: Request, guild_id: int, user_id: s
 
 @app.post("/admin/test-welcome")
 async def test_welcome_message(request: Request):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
     form = dict(await request.form())
     guild_id = _to_int(form.get("guild_id"), 0)
     if guild_id <= 0:
         return JSONResponse({"ok": False, "error": "guild_id_missing"}, status_code=400)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
 
     channel_id = _to_int(form.get("welcome_channel_id"), 0)
     if channel_id <= 0:
@@ -1819,7 +2064,7 @@ welcome_text3_box_width: int = Form(500),
     return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
     pool = await _ensure_pool(app)
     try:
@@ -1939,8 +2184,10 @@ async def quick_reset_checkin(
     ymd: str = Form(""),    return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     ymd = ymd.strip() or kst_today_ymd()
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
@@ -1963,8 +2210,10 @@ async def quick_set_level(
     level: int = Form(...),    return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
     if not user_ids:
@@ -1999,8 +2248,10 @@ async def rules_upsert(
     remove_role_ids: str = Form(""),    return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     add_ids = _parse_ids(add_role_ids)
     rem_ids = _parse_ids(remove_role_ids)
@@ -2019,8 +2270,10 @@ async def rules_upsert(
 
 @app.post("/admin/rules-delete")
 async def rules_delete(request: Request, guild_id: int = Form(...), level: int = Form(...)):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     await pool.execute("DELETE FROM level_role_sets WHERE guild_id=$1 AND level=$2", int(guild_id), int(level))
     queued = await _enqueue_all_members_role_sync(pool, int(guild_id))
@@ -2034,8 +2287,10 @@ async def reaction_block_add(
     message: str = Form(...),
     blocked_role_ids: str = Form(""),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     # parse
     mids = _parse_ids(message)
@@ -2065,8 +2320,10 @@ async def reaction_block_delete(
     message_id: int = Form(...),
     role_id: int = Form(...),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     await pool.execute(
         "DELETE FROM reaction_blocks WHERE guild_id=$1 AND message_id=$2 AND blocked_role_id=$3",
@@ -2086,8 +2343,10 @@ async def reaction_role_upsert(
     add_role_ids: str = Form(""),
     remove_role_ids: str = Form(""),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     mids = _parse_ids(message)
     if not mids:
@@ -2123,8 +2382,10 @@ async def reaction_role_delete(
     message_id: int = Form(...),
     emoji_key: str = Form(...),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return RedirectResponse(url="/", status_code=302)
+    if not _request_can_access_guild(request, guild_id):
+        return RedirectResponse(url="/admin?msg=" + quote_plus("이 서버 작업을 실행할 권한이 없어요.") + "&kind=error", status_code=302)
     pool = await _ensure_pool(app)
     await pool.execute(
         "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
@@ -2135,8 +2396,10 @@ async def reaction_role_delete(
 # ---- APIs for UI (DB cache only, no Discord REST) ----
 @app.get("/admin/api/roles_search")
 async def api_roles_search(request: Request, guild_id: int, q: str = ""):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
     pool = await _ensure_pool(app)
     qq = (q or "").strip()
     if qq:
@@ -2161,8 +2424,10 @@ async def api_roles_search(request: Request, guild_id: int, q: str = ""):
 
 @app.get("/admin/api/members_search")
 async def api_members_search(request: Request, guild_id: int, q: str = ""):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
 
     pool = await _ensure_pool(app)
     q = (q or "").strip()
@@ -2218,8 +2483,10 @@ async def api_members_search(request: Request, guild_id: int, q: str = ""):
 
 @app.get("/admin/api/members_list")
 async def api_members_list(request: Request, guild_id: int, limit: int = 200, offset: int = 0):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
     pool = await _ensure_pool(app)
     try:
         rows = await pool.fetch(
@@ -2246,8 +2513,10 @@ async def api_members_list(request: Request, guild_id: int, limit: int = 200, of
 
 @app.get("/admin/api/members_by_role")
 async def api_members_by_role(request: Request, guild_id: int, role_id: int):
-    if not _require_admin(request):
+    if not _has_dashboard_access(request):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not _request_can_access_guild(request, guild_id):
+        return JSONResponse({"ok": False, "error": "forbidden_guild"}, status_code=403)
     pool = await _ensure_pool(app)
     try:
         rows = await pool.fetch(
