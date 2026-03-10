@@ -119,6 +119,10 @@
     .settings-title{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap}
     .settings-title h2,.settings-title h3{margin-bottom:6px}
     .hint-badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#16213a;border:1px solid #233456;color:#bfdbfe;font-size:12px}
+    .invite-helper{margin-top:12px;border:1px solid #2b3a60;background:#0f172a}
+    .invite-status{margin-top:10px;padding:10px 12px;border-radius:12px;background:#0b1220;border:1px solid #1f2a44;color:#cbd5e1}
+    .invite-status.success{border-color:#14532d;background:#0b1f14;color:#dcfce7}
+    .invite-status.warning{border-color:#7c2d12;background:#21110b;color:#ffedd5}
 
     @media (max-width: 980px){
       .admin-shell{display:block}
@@ -174,9 +178,9 @@
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
         <button type="submit">열기</button>
         {% if guild_id and selected_guild_invite_url %}
-          <a href="{{ selected_guild_invite_url }}" class="btn secondary" target="_blank" rel="noopener">이 서버에 봇 초대</a>
+          <button type="button" class="btn secondary" onclick="openInviteFlow('{{ selected_guild_invite_url }}', '{{ guild_id }}')">이 서버에 봇 초대</button>
         {% elif invite_url %}
-          <a href="{{ invite_url }}" class="btn secondary" target="_blank" rel="noopener">봇 초대하기</a>
+          <button type="button" class="btn secondary" onclick="openInviteFlow('{{ invite_url }}', '')">봇 초대하기</button>
         {% else %}
           <button type="button" class="btn secondary" disabled>봇 초대하기</button>
         {% endif %}
@@ -188,6 +192,26 @@
       {% else %}
         초대 버튼이 비활성화되면 Northflank 환경변수에 <b>DISCORD_CLIENT_ID</b> 또는 <b>DISCORD_APPLICATION_ID</b>를 넣어주세요.
       {% endif %}
+    </div>
+
+    <div class="card invite-helper" id="inviteFlowCard" style="display:none">
+      <div class="hero-row">
+        <div>
+          <h3 style="margin:0 0 6px">봇 초대 진행 중</h3>
+          <div class="small" id="inviteFlowText">Discord 초대 창은 새 창으로 열립니다. 초대가 끝나도 이 페이지로 자동 복귀하지 않는 게 정상이에요.</div>
+        </div>
+        <div class="hero-meta">
+          <span class="meta-pill" id="inviteFlowGuildPill" style="display:none">대상 서버 ID: <b id="inviteFlowGuildIdText">-</b></span>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap">
+        <button type="button" class="btn secondary" onclick="reopenInviteFlow()">초대 창 다시 열기</button>
+        <button type="button" id="inviteCheckBtn" onclick="checkInviteFlowStatus()">초대 완료했어요</button>
+        <a href="/admin" id="inviteOpenAdminBtn" class="btn" style="display:none">이 서버 설정 열기</a>
+        <button type="button" class="btn secondary" onclick="refreshInviteFlowPage()">서버 목록 새로고침</button>
+        <button type="button" class="btn secondary" onclick="clearInviteFlow()">닫기</button>
+      </div>
+      <div class="invite-status" id="inviteFlowStatus">초대 후 이 페이지로 돌아와 <b>초대 완료했어요</b>를 누르면 연결 확인 후 바로 서버 설정으로 이동시켜 드릴게요.</div>
     </div>
   </div>
 
@@ -2157,6 +2181,148 @@ function initWelcomePreviewInteractions(){
     });
 }
 
+
+const inviteFlowStorageKey = 'nyoping_invite_flow_v1';
+
+function getCurrentAdminBaseUrl(){
+  const gid = '{{ guild_id or "" }}';
+  return gid ? `/admin?guild_id=${gid}` : '/admin';
+}
+
+function setInviteStatusText(text, kind){
+  const box = document.getElementById('inviteFlowStatus');
+  if (!box) return;
+  box.className = 'invite-status' + (kind ? ` ${kind}` : '');
+  box.innerHTML = text;
+}
+
+function renderInviteFlowCard(){
+  let data = {};
+  try {
+    data = JSON.parse(localStorage.getItem(inviteFlowStorageKey) || '{}');
+  } catch(e) {
+    data = {};
+  }
+  const card = document.getElementById('inviteFlowCard');
+  if (!card) return;
+  const url = String(data.url || '');
+  const guildId = String(data.guildId || '');
+  const startedAt = String(data.startedAt || '');
+  const guildPill = document.getElementById('inviteFlowGuildPill');
+  const guildText = document.getElementById('inviteFlowGuildIdText');
+  const openBtn = document.getElementById('inviteOpenAdminBtn');
+  if (!url){
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = 'block';
+  if (guildId){
+    if (guildPill) guildPill.style.display = 'inline-flex';
+    if (guildText) guildText.textContent = guildId;
+    if (openBtn) openBtn.href = `/admin?guild_id=${guildId}`;
+    setInviteStatusText(
+      'Discord 초대 창에서 권한 승인까지 끝내면, 여기서 <b>초대 완료했어요</b>를 눌러 연결 상태를 확인할 수 있어요.',
+      ''
+    );
+  } else {
+    if (guildPill) guildPill.style.display = 'none';
+    setInviteStatusText(
+      '서버를 미리 고르지 않고 초대를 연 상태예요. 초대가 끝나면 <b>서버 목록 새로고침</b> 후 해당 서버를 선택해 주세요.',
+      'warning'
+    );
+  }
+  const text = document.getElementById('inviteFlowText');
+  if (text){
+    const started = startedAt ? `초대 시작: ${startedAt}` : 'Discord 초대 창은 새 창으로 열립니다.';
+    text.textContent = `${started} · 초대 후 자동 복귀가 안 되는 건 정상이에요.`;
+  }
+}
+
+function openInviteFlow(url, guildId){
+  const inviteUrl = String(url || '').trim();
+  if (!inviteUrl) return;
+  const data = {
+    url: inviteUrl,
+    guildId: String(guildId || '').trim(),
+    startedAt: new Date().toLocaleString('ko-KR'),
+  };
+  try {
+    localStorage.setItem(inviteFlowStorageKey, JSON.stringify(data));
+  } catch(e) {}
+  renderInviteFlowCard();
+  window.open(inviteUrl, 'nyopingBotInvite', 'popup=yes,width=540,height=760');
+}
+
+function reopenInviteFlow(){
+  let data = {};
+  try {
+    data = JSON.parse(localStorage.getItem(inviteFlowStorageKey) || '{}');
+  } catch(e) {
+    data = {};
+  }
+  const inviteUrl = String(data.url || '').trim();
+  if (!inviteUrl) return;
+  window.open(inviteUrl, 'nyopingBotInvite', 'popup=yes,width=540,height=760');
+}
+
+function clearInviteFlow(){
+  try {
+    localStorage.removeItem(inviteFlowStorageKey);
+  } catch(e) {}
+  const card = document.getElementById('inviteFlowCard');
+  if (card) card.style.display = 'none';
+}
+
+function refreshInviteFlowPage(){
+  window.location.href = getCurrentAdminBaseUrl();
+}
+
+async function checkInviteFlowStatus(){
+  let data = {};
+  try {
+    data = JSON.parse(localStorage.getItem(inviteFlowStorageKey) || '{}');
+  } catch(e) {
+    data = {};
+  }
+  const guildId = String(data.guildId || '').trim();
+  const openBtn = document.getElementById('inviteOpenAdminBtn');
+  if (!guildId){
+    setInviteStatusText('서버를 미리 고르지 않은 상태예요. <b>서버 목록 새로고침</b> 후 해당 서버를 다시 선택해 주세요.', 'warning');
+    if (openBtn) openBtn.style.display = 'none';
+    return;
+  }
+
+  setInviteStatusText('Discord 연결 상태를 확인하는 중이에요...', '');
+  try {
+    const res = await fetch(`/api/invite-status?guild_id=${encodeURIComponent(guildId)}`, { credentials: 'same-origin' });
+    const info = await res.json();
+    if (!res.ok || !info.ok){
+      throw new Error(info.error || `HTTP ${res.status}`);
+    }
+
+    if (info.connected){
+      const guildName = String(info.guild_name || '').trim();
+      const label = guildName ? `<b>${guildName}</b>` : `<b>서버 ${guildId}</b>`;
+      const targetUrl = String(info.open_admin_url || `/admin?guild_id=${guildId}`);
+      if (openBtn){
+        openBtn.href = targetUrl;
+        openBtn.style.display = 'inline-flex';
+      }
+      setInviteStatusText(`${label} 에서 봇 연결이 확인됐어요. 잠시 후 해당 서버 설정으로 이동합니다.`, 'success');
+      setTimeout(() => {
+        window.location.href = targetUrl;
+      }, 900);
+      return;
+    }
+
+    if (openBtn) openBtn.style.display = 'none';
+    setInviteStatusText('아직 봇 연결이 확인되지 않았어요. 초대 승인 직후라면 3~10초 정도 뒤에 다시 눌러 보세요.', 'warning');
+  } catch (err){
+    if (openBtn) openBtn.style.display = 'none';
+    setInviteStatusText(`연결 확인 중 오류가 났어요. 잠시 후 다시 시도해 주세요. (${String(err)})`, 'warning');
+  }
+}
+
 function initializeAdminPanes(){
   const params = new URLSearchParams(window.location.search || '');
   const requestedPane = normalizeAdminPane(params.get('pane') || '');
@@ -2171,6 +2337,7 @@ function initializeAdminPanes(){
 }
 
 document.addEventListener('DOMContentLoaded', function(){
+  renderInviteFlowCard();
   preloadRoleMap();
   initWelcomePreviewInteractions();
   initChannelSelections();

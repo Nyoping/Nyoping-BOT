@@ -51,15 +51,27 @@
   <p class="small">다른 서버 운영자도 자기 서버에 뇨핑봇을 초대한 뒤 대시보드에서 자기 서버만 설정할 수 있어요.</p>
   <div class="mt row" style="flex-wrap:wrap">
     {% if invite_url %}
-    <a href="{{ invite_url }}" class="btn secondary" target="_blank" rel="noopener">봇 초대하기</a>
+    <button type="button" class="btn secondary" onclick="openInviteFlow('{{ invite_url }}')">봇 초대하기</button>
     {% endif %}
+    <a href="/admin" class="btn">대시보드로 이동</a>
   </div>
   <div class="mt small">
     순서: <b>봇 초대</b> → <b>Discord 로그인</b> → <b>자기 서버 선택 후 설정</b><br>
     공개용 일반 사용자 페이지는 제거했고, 운영자용 흐름만 남겼어요.
   </div>
 </div>
-    </div>
+    
+      <div class="card" id="inviteFlowCard" style="display:none">
+        <h2 class="title">봇 초대 진행 중</h2>
+        <p class="small" id="inviteFlowText">Discord 초대 창은 새 창으로 열립니다. 초대가 끝나도 이 페이지로 자동 복귀하지 않는 게 정상이에요.</p>
+        <div class="mt row" style="flex-wrap:wrap">
+          <button type="button" class="btn secondary" onclick="reopenInviteFlow()">초대 창 다시 열기</button>
+          <a href="/admin" class="btn">초대 완료 후 대시보드로 이동</a>
+          <button type="button" class="btn secondary" onclick="clearInviteFlow()">닫기</button>
+        </div>
+        <div class="mt small">흐름: <b>봇 초대</b> → <b>이 페이지로 돌아오기</b> → <b>대시보드로 이동</b> → <b>서버 선택 후 설정</b></div>
+      </div>
+</div>
     </div>
 
     <div class="mt small" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -73,5 +85,41 @@
       </span>
     </div>
   </div>
+
+  <script>
+    let inviteFlowUrl = "";
+    function setInviteFlowVisible(visible){
+      const card = document.getElementById("inviteFlowCard");
+      if (card) card.style.display = visible ? "block" : "none";
+    }
+    function openInviteFlow(url){
+      if (!url) return;
+      inviteFlowUrl = String(url || "");
+      try { localStorage.setItem("nyoping_invite_flow_url", inviteFlowUrl); } catch(e) {}
+      window.open(inviteFlowUrl, "nyopingBotInvite", "popup=yes,width=540,height=760");
+      setInviteFlowVisible(true);
+    }
+    function reopenInviteFlow(){
+      if (!inviteFlowUrl){
+        try { inviteFlowUrl = localStorage.getItem("nyoping_invite_flow_url") || ""; } catch(e) {}
+      }
+      if (inviteFlowUrl){
+        window.open(inviteFlowUrl, "nyopingBotInvite", "popup=yes,width=540,height=760");
+        setInviteFlowVisible(true);
+      }
+    }
+    function clearInviteFlow(){
+      inviteFlowUrl = "";
+      try { localStorage.removeItem("nyoping_invite_flow_url"); } catch(e) {}
+      setInviteFlowVisible(false);
+    }
+    document.addEventListener("DOMContentLoaded", function(){
+      try { inviteFlowUrl = localStorage.getItem("nyoping_invite_flow_url") || ""; } catch(e) {}
+      if (inviteFlowUrl){
+        setInviteFlowVisible(true);
+      }
+    });
+  </script>
+
 </body>
 </html>

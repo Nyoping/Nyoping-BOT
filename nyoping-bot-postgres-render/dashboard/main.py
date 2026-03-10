@@ -147,6 +147,67 @@ def _discord_install_url(*, guild_id: int | None = None, lock_guild: bool = Fals
             params["disable_guild_select"] = "true"
     return "https://discord.com/oauth2/authorize?" + urlencode(params)
 
+async def _guild_known_to_dashboard(pool: asyncpg.Pool, guild_id: int) -> tuple[bool, str]:
+    gid = int(guild_id)
+    try:
+        row = await pool.fetchrow(
+            "SELECT guild_id, guild_name FROM guilds_cache WHERE guild_id=$1 LIMIT 1",
+            gid,
+        )
+        if row:
+            name = str(row.get("guild_name") or "").strip()
+            return True, name
+    except Exception:
+        pass
+
+    try:
+        guilds = await _list_guilds_for_admin(pool)
+    except Exception:
+        guilds = []
+
+    for item in guilds or []:
+        try:
+            item_gid = int(item.get("guild_id") or 0)
+        except Exception:
+            continue
+        if item_gid == gid:
+            return True, str(item.get("guild_name") or "").strip()
+    return False, ""
+
+
+async def _invite_status_payload(pool: asyncpg.Pool, guild_id: int) -> dict[str, Any]:
+    gid = int(guild_id)
+    known, known_name = await _guild_known_to_dashboard(pool, gid)
+
+    connected = bool(known)
+    detected_via = "cache" if known else ""
+    guild_name = str(known_name or "").strip()
+
+    token = _discord_bot_token()
+    if token:
+        try:
+            data = _discord_api_get(f"/guilds/{gid}", token=token, timeout=8)
+            connected = True
+            detected_via = "discord_api"
+            live_name = str(data.get("name") or "").strip()
+            if live_name:
+                guild_name = live_name
+        except Exception:
+            log.info("invite status check: guild %s not confirmed yet", gid)
+
+    return {
+        "ok": True,
+        "guild_id": gid,
+        "guild_name": guild_name,
+        "connected": bool(connected),
+        "detected_via": detected_via,
+        "open_admin_url": f"/admin?guild_id={gid}&msg={quote_plus('봇 연결이 확인되어 이 서버 설정을 열었어요.')}&kind=success" if connected else f"/admin?guild_id={gid}",
+        "refresh_admin_url": f"/admin?guild_id={gid}",
+        "checked_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+
 
 def _legal_effective_date() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
@@ -1260,6 +1321,18 @@ async def index(request: Request):
 
 
 
+
+
+
+
+@app.get("/api/invite-status")
+async def api_invite_status(guild_id: int):
+    gid = int(guild_id or 0)
+    if gid <= 0:
+        return JSONResponse({"ok": False, "error": "invalid_guild_id"}, status_code=400)
+    pool = await _ensure_pool(app)
+    payload = await _invite_status_payload(pool, gid)
+    return JSONResponse(payload)
 
 
 @app.get("/assets/images/support-server-banner.png")
