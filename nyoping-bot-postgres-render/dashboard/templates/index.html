@@ -6,72 +6,67 @@
   <title>뇨핑봇 대시보드</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;margin:0;background:#0b1220;color:#e5e7eb}
-    .wrap{max-width:960px;margin:0 auto;padding:28px}
-    .card{background:#111a2e;border:1px solid #1f2a44;border-radius:14px;padding:18px}
-    input,button{font-size:16px}
+    .wrap{max-width:980px;margin:0 auto;padding:28px}
+    .hero{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-end}
+    .sub{color:#94a3b8;font-size:14px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:16px;margin-top:18px}
+    .card{background:#111a2e;border:1px solid #1f2a44;border-radius:16px;padding:18px;box-shadow:0 14px 34px rgba(0,0,0,.18)}
+    input,button,.btn{font-size:16px}
     input{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb}
-    button{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:white;cursor:pointer}
+    button,.btn{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:white;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+    .btn.secondary{background:#334155}
     .row{display:flex;gap:12px;align-items:center}
     .mt{margin-top:14px}
-    .small{font-size:13px;color:#9ca3af}
-    .section{margin-top:16px}
-    .btn-discord{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:10px;background:#5865F2;color:#fff;text-decoration:none;font-weight:700}
-    .btn-ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb;text-decoration:none}
-    .alert{margin-top:12px;padding:12px 14px;border-radius:12px;border:1px solid #7f1d1d;background:rgba(127,29,29,.18);color:#fecaca}
-    .stack{display:flex;flex-direction:column;gap:10px}
+    .small{font-size:13px;color:#9ca3af;line-height:1.6}
+    .title{margin:0 0 8px}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>❄️ 뇨핑봇 대시보드</h1>
-    <div class="card stack">
+    <div class="hero">
       <div>
-        <h2 style="margin:0 0 8px">서버 관리자용 접속</h2>
-        <p class="small" style="margin:0">다른 서버 관리자도 Discord로 로그인해서 <b>자기 서버만</b> 선택하고 설정할 수 있어요.</p>
+        <h1 style="margin:0">❄️ 뇨핑봇 대시보드</h1>
+        <div class="sub">관리자는 서버 설정을, 일반 사용자는 프로필/랭킹 같은 공개 정보를 볼 수 있어요.</div>
       </div>
+      <div class="small">개발자: <b>{{ developer_name }}</b></div>
+    </div>
 
-      {% if oauth_error %}
-      <div class="alert">{{ oauth_error }}</div>
-      {% endif %}
-
-      <div class="section">
-        {% if oauth_logged_in %}
-          <div class="small" style="margin-bottom:10px">
-            Discord 로그인됨:
-            <b>{{ oauth_user.global_name or oauth_user.username or oauth_user.id }}</b>
-          </div>
-          <div class="row" style="flex-wrap:wrap">
-            <a href="/admin" class="btn-discord">Discord 대시보드 열기</a>
-            <a href="/logout" class="btn-ghost">로그아웃</a>
-          </div>
-        {% elif oauth_enabled %}
-          <a href="/login/discord?next=/admin" class="btn-discord">Discord로 로그인</a>
-          <div class="small mt">로그인 후 내가 관리하는 서버 목록이 보이고, 봇이 없으면 바로 초대할 수 있어요.</div>
-        {% elif oauth_disabled %}
-          <div class="alert">현재 `DISABLE_DISCORD_OAUTH=1` 상태라 Discord 로그인이 꺼져 있어요. 공개 배포하려면 이 값을 제거하거나 0으로 바꿔주세요.</div>
-        {% else %}
-          <div class="alert">Discord 로그인을 쓰려면 `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URI` 환경변수가 필요해요.</div>
-        {% endif %}
-      </div>
-
-      <div class="section">
-        <p class="small" style="margin:0 0 8px">기존 운영자는 아래 관리자 비밀번호 로그인도 계속 사용할 수 있어요.</p>
+    <div class="grid">
+      <div class="card">
+        <h2 class="title">관리자 로그인</h2>
+        <p class="small">관리자 비밀번호로 로그인하면 서버 설정과 빠른 작업을 사용할 수 있어요.</p>
         <form method="post" action="/admin-login" class="mt">
           <div class="row">
             <input type="password" name="password" placeholder="관리자 비밀번호" required>
-            <button type="submit">관리자 로그인</button>
+            <button type="submit">로그인</button>
           </div>
         </form>
+        <div class="mt small">
+          로그인 후 <b>/admin</b> 페이지에서 서버 설정을 관리할 수 있어요.
+        </div>
       </div>
 
-      <div class="mt small" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <span>개발자: <b>{{ developer_name }}</b></span>
-        <span>
-          <a href="/legal/privacy" style="color:#93c5fd;text-decoration:none">개인정보처리방침</a>
-          ·
-          <a href="/legal/terms" style="color:#93c5fd;text-decoration:none">이용약관</a>
-        </span>
+      <div class="card">
+        <h2 class="title">일반 사용자 입장</h2>
+        <p class="small">비밀번호 없이 들어가서 서버 랭킹, 유저 프로필, 출석/레벨 정보를 확인할 수 있어요.</p>
+        <div class="mt">
+          <a href="/user" class="btn secondary">사용자 페이지 열기</a>
+        </div>
+        <div class="mt small">
+          일반 사용자 페이지는 공개용 조회 화면이며, 서버 설정 변경은 할 수 없어요.
+        </div>
       </div>
+    </div>
+
+    <div class="mt small" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <span>
+        <a href="/legal/privacy" style="color:#93c5fd;text-decoration:none">개인정보처리방침</a>
+        ·
+        <a href="/legal/terms" style="color:#93c5fd;text-decoration:none">이용약관</a>
+      </span>
+      <span>
+        <a href="{{ support_server_url if support_server_url else '#' }}" style="color:#93c5fd;text-decoration:none">지원겸 종합게임 서버</a>
+      </span>
     </div>
   </div>
 </body>
