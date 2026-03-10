@@ -1335,6 +1335,83 @@ def _textish_channels(channels: Sequence[Mapping[str, Any]]) -> list[Mapping[str
             out.append(c)
     return out or list(channels or [])
 
+def _sorted_channel_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    def _sort_key(item: Mapping[str, Any]) -> tuple[int, str, int]:
+        try:
+            ctype = int(item.get("channel_type") or 0)
+        except Exception:
+            ctype = 0
+        name = str(item.get("channel_name") or "").lower()
+        try:
+            cid = int(item.get("channel_id") or 0)
+        except Exception:
+            cid = 0
+        return (ctype, name, cid)
+
+    return [dict(x) for x in sorted(list(rows or []), key=_sort_key)]
+
+
+async def _load_channels_for_dashboard(pool: asyncpg.Pool, guild_id: int) -> list[dict[str, Any]]:
+    gid = int(guild_id or 0)
+    if gid <= 0:
+        return []
+
+    cached = await _fetch_optional(
+        pool,
+        "SELECT channel_id, channel_name, channel_type FROM guild_channels_cache WHERE guild_id=$1 ORDER BY channel_type, channel_name",
+        gid,
+    )
+    if cached:
+        return _sorted_channel_rows(cached)
+
+    token = _discord_bot_token()
+    if not token:
+        return []
+
+    live_rows: list[dict[str, Any]] = []
+    try:
+        api_rows = _discord_api_get(f"/guilds/{gid}/channels", token=token, timeout=10) or []
+        for row in api_rows:
+            try:
+                cid = int(row.get("id") or 0)
+            except Exception:
+                cid = 0
+            if cid <= 0:
+                continue
+            live_rows.append({
+                "channel_id": cid,
+                "channel_name": str(row.get("name") or f"채널 {cid}"),
+                "channel_type": int(row.get("type") or 0),
+            })
+    except Exception:
+        log.exception("live channel fetch failed guild=%s", gid)
+        live_rows = []
+
+    live_rows = _sorted_channel_rows(live_rows)
+    if not live_rows:
+        return []
+
+    try:
+        await pool.execute("DELETE FROM guild_channels_cache WHERE guild_id=$1", gid)
+        for row in live_rows:
+            await pool.execute(
+                """INSERT INTO guild_channels_cache (guild_id, channel_id, channel_name, channel_type, updated_at)
+                   VALUES ($1,$2,$3,$4,NOW())
+                   ON CONFLICT (guild_id, channel_id)
+                   DO UPDATE SET channel_name=EXCLUDED.channel_name,
+                                 channel_type=EXCLUDED.channel_type,
+                                 updated_at=NOW()""",
+                gid,
+                int(row.get("channel_id") or 0),
+                str(row.get("channel_name") or ""),
+                int(row.get("channel_type") or 0),
+            )
+    except Exception:
+        log.exception("channel cache backfill failed guild=%s", gid)
+
+    return live_rows
+
+
 async def _enqueue_all_members_role_sync(pool: asyncpg.Pool, guild_id: int) -> int:
     try:
         return int(await pool.execute(
@@ -1680,11 +1757,7 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "SELECT role_id, role_name, position FROM guild_roles_cache WHERE guild_id=$1 ORDER BY position DESC, role_name ASC",
             gid,
         )
-        channels = await _fetch_optional(
-            pool,
-            "SELECT channel_id, channel_name, channel_type FROM guild_channels_cache WHERE guild_id=$1 ORDER BY channel_type, channel_name",
-            gid,
-        )
+        channels = await _load_channels_for_dashboard(pool, gid)
         reaction_blocks = await _fetch_optional(
             pool,
             "SELECT channel_id, message_id, blocked_role_id FROM reaction_blocks WHERE guild_id=$1 ORDER BY message_id, blocked_role_id",
