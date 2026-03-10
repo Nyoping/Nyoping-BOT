@@ -156,6 +156,30 @@ def _discord_oauth_redirect_uri() -> str:
     return (_env("DISCORD_OAUTH_REDIRECT_URI") or _env("DISCORD_REDIRECT_URI")).strip()
 
 
+def _discord_guild_icon_url(guild_id: int | str | None, icon_hash: str | None) -> str:
+    try:
+        gid = int(guild_id or 0)
+    except Exception:
+        gid = 0
+    icon = str(icon_hash or "").strip()
+    if gid <= 0 or not icon:
+        return ""
+    ext = "gif" if icon.startswith("a_") else "png"
+    return f"https://cdn.discordapp.com/icons/{gid}/{icon}.{ext}?size=256"
+
+
+def _guild_initial(name: str | None, guild_id: int | str | None = None) -> str:
+    text = str(name or "").strip()
+    for ch in text:
+        if ch.strip():
+            return ch.upper()
+    try:
+        gid = int(guild_id or 0)
+    except Exception:
+        gid = 0
+    return str(gid)[0] if gid > 0 else "?"
+
+
 def _discord_oauth_enabled() -> bool:
     disabled = _env("DISABLE_DISCORD_OAUTH", "").strip().lower() in {"1", "true", "yes", "on"}
     return (not disabled) and bool(_discord_application_id() and _discord_client_secret() and _discord_oauth_redirect_uri())
@@ -204,6 +228,8 @@ def _compact_oauth_guilds(items: Any) -> list[dict[str, Any]]:
             "id": str(gid),
             "name": str(item.get("name") or item.get("guild_name") or "").strip(),
             "permissions": str(perms),
+            "icon": str(item.get("icon") or "").strip(),
+            "owner": bool(item.get("owner") or False),
         })
     compact.sort(key=lambda x: (str(x.get("name") or "").lower(), int(x.get("id") or 0)))
     return compact
@@ -307,10 +333,15 @@ async def _list_guilds_for_request(pool: asyncpg.Pool, request: Request) -> list
             continue
         oauth_name = str(item.get("name") or item.get("guild_name") or "").strip()
         known, known_name = await _guild_known_to_dashboard(pool, gid)
+        resolved_name = (known_name or oauth_name or f"서버 {gid}")
+        icon_hash = str(item.get("icon") or "").strip()
         out.append({
             "guild_id": gid,
-            "guild_name": (known_name or oauth_name or f"서버 {gid}"),
+            "guild_name": resolved_name,
             "bot_connected": bool(known),
+            "icon": icon_hash,
+            "icon_url": _discord_guild_icon_url(gid, icon_hash),
+            "guild_initial": _guild_initial(resolved_name, gid),
         })
 
     dedup: list[dict[str, Any]] = []
@@ -1486,6 +1517,14 @@ async def _list_guilds_for_admin(pool: asyncpg.Pool) -> list[dict[str, Any]]:
                 item["guild_name"] = str(resolved_name).strip()
             else:
                 item["guild_name"] = current_name
+
+    for item in out:
+        gid = int(item.get("guild_id") or 0)
+        name = str(item.get("guild_name") or "").strip() or f"서버 {gid}"
+        item.setdefault("icon", "")
+        item.setdefault("icon_url", "")
+        item.setdefault("guild_initial", _guild_initial(name, gid))
+        item["guild_name"] = name
 
     out.sort(key=lambda x: (0 if x.get("guild_name") and not _is_placeholder_guild_name(str(x.get("guild_name") or ""), int(x.get("guild_id") or 0)) else 1, str(x.get("guild_name") or ""), int(x["guild_id"])))
     return out

@@ -123,6 +123,18 @@
     .invite-status{margin-top:10px;padding:10px 12px;border-radius:12px;background:#0b1220;border:1px solid #1f2a44;color:#cbd5e1}
     .invite-status.success{border-color:#14532d;background:#0b1f14;color:#dcfce7}
     .invite-status.warning{border-color:#7c2d12;background:#21110b;color:#ffedd5}
+    .guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:14px;margin-top:14px}
+    .guild-card{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 10px;border-radius:18px;border:1px solid #22304f;background:#0b1220;text-decoration:none;color:#e5e7eb;min-height:156px;transition:transform .12s ease,border-color .12s ease,background .12s ease,box-shadow .12s ease;position:relative;overflow:hidden}
+    .guild-card:hover{transform:translateY(-2px);border-color:#60a5fa;background:#0f1730;box-shadow:0 12px 28px rgba(0,0,0,.22)}
+    .guild-card.selected{border-color:#60a5fa;background:#13203f;box-shadow:0 14px 28px rgba(37,99,235,.18)}
+    .guild-card-badge{position:absolute;top:10px;right:10px;font-size:11px;padding:3px 7px;border-radius:999px;border:1px solid #22304f;background:#111a2e;color:#cbd5e1}
+    .guild-card-badge.off{border-color:#7c2d12;color:#fdba74;background:#21110b}
+    .guild-avatar,.guild-avatar-fallback{width:72px;height:72px;border-radius:22px;display:block;object-fit:cover;box-shadow:0 10px 22px rgba(0,0,0,.26);border:1px solid rgba(255,255,255,.08)}
+    .guild-avatar-fallback{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1d4ed8,#7c3aed);font-size:28px;font-weight:800;color:white}
+    .guild-card-name{font-size:13px;font-weight:700;text-align:center;line-height:1.4;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:36px}
+    .guild-card-id{font-size:11px;color:#94a3b8;text-align:center}
+    .guild-grid-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+    .guild-grid-note{margin-top:12px}
 
     @media (max-width: 980px){
       .admin-shell{display:block}
@@ -171,33 +183,44 @@
       </div>
       {% endif %}
     </div>
-    <form method="get" action="/admin" class="row">
-      <div class="col">
-        <label>서버 목록</label>
-        <select name="guild_id" required>
-          <option value="">서버를 선택하세요</option>
-          {% for g in guilds %}
-            {% set _gname = (g.guild_name|string).strip() if g.guild_name is not none else '' %}
-            <option value="{{ g.guild_id }}" {% if (guild_id|string) == (g.guild_id|string) %}selected{% endif %}>{{ _gname if _gname else ('서버 ' ~ g.guild_id) }} · {{ g.guild_id }}</option>
-          {% endfor %}
-        </select>
-        {% if not guilds or guilds|length == 0 %}<div class="small" style="margin-top:6px;color:#fca5a5">서버 목록이 비어 있어요. Discord 로그인 상태와 서버 관리 권한을 확인한 뒤 새로고침해 보세요.</div>{% endif %}
-        <div class="small">목록에 없으면 아직 그 서버에 봇이 들어오지 않은 상태일 수 있어요. 아래 초대 버튼으로 먼저 서버에 봇을 추가한 뒤 다시 들어오세요.</div>
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-        <button type="submit">열기</button>
-        {% if guild_id and selected_guild_invite_url %}
-          <button type="button" class="btn secondary" onclick="openInviteFlow('{{ selected_guild_invite_url }}', '{{ guild_id }}')">이 서버에 봇 초대</button>
-        {% elif invite_url %}
-          <button type="button" class="btn secondary" onclick="openInviteFlow('{{ invite_url }}', '')">봇 초대하기</button>
-        {% else %}
-          <button type="button" class="btn secondary" disabled>봇 초대하기</button>
-        {% endif %}
-      </div>
-    </form>
+    {% set _selected_guild_invite = selected_guild_invite_url if selected_guild_invite_url else invite_url %}
+    <div class="guild-grid" aria-label="서버 목록">
+      {% for g in guilds %}
+        {% set _gid = g.guild_id %}
+        {% set _gname = (g.guild_name|string).strip() if g.guild_name is not none else '' %}
+        {% set _selected = (guild_id|string) == (_gid|string) %}
+        {% set _icon_url = (g.icon_url|string).strip() if g.icon_url is not none else '' %}
+        {% set _initial = (g.guild_initial|string).strip() if g.guild_initial is not none else ((_gname[:1] if _gname else 'S')) %}
+        {% set _connected = g.bot_connected if g.bot_connected is defined else true %}
+        <a href="/admin?guild_id={{ _gid }}" class="guild-card{% if _selected %} selected{% endif %}">
+          <span class="guild-card-badge{% if not _connected %} off{% endif %}">{% if _connected %}연결됨{% else %}초대 필요{% endif %}</span>
+          {% if _icon_url %}
+            <img src="{{ _icon_url }}" alt="{{ _gname if _gname else ('서버 ' ~ _gid) }}" class="guild-avatar">
+          {% else %}
+            <div class="guild-avatar-fallback">{{ _initial }}</div>
+          {% endif %}
+          <div class="guild-card-name">{{ _gname if _gname else ('서버 ' ~ _gid) }}</div>
+          <div class="guild-card-id">{{ _gid }}</div>
+        </a>
+      {% endfor %}
+    </div>
+    {% if not guilds or guilds|length == 0 %}
+      <div class="small" style="margin-top:8px;color:#fca5a5">서버 목록이 비어 있어요. Discord 로그인 상태와 서버 관리 권한을 확인한 뒤 새로고침해 보세요.</div>
+    {% endif %}
+    <div class="guild-grid-note small">서버 카드를 누르면 바로 해당 서버 설정을 열어요. 목록에 없으면 아직 그 서버에 봇이 들어오지 않은 상태일 수 있어요.</div>
+    <div class="guild-grid-actions">
+      {% if guild_id and selected_guild_invite_url %}
+        <button type="button" class="btn secondary" onclick="openInviteFlow('{{ selected_guild_invite_url }}', '{{ guild_id }}')">이 서버에 봇 초대</button>
+      {% elif invite_url %}
+        <button type="button" class="btn secondary" onclick="openInviteFlow('{{ invite_url }}', '')">서버에 서버에 봇 초대하기</button>
+      {% else %}
+        <button type="button" class="btn secondary" disabled>서버에 서버에 봇 초대하기</button>
+      {% endif %}
+      <a href="/admin" class="btn secondary">목록 새로고침</a>
+    </div>
     <div class="small" style="margin-top:10px">
       {% if invite_url %}
-        다른 서버에도 뇨핑봇을 쓰게 하려면 <b>봇 초대하기</b>를 눌러 Discord 설치 화면에서 서버를 선택하면 돼요.
+        다른 서버에도 뇨핑봇을 쓰게 하려면 <b>서버에 봇 초대하기</b>를 눌러 Discord 설치 화면에서 서버를 선택하면 돼요.
       {% else %}
         초대 버튼이 비활성화되면 Northflank 환경변수에 <b>DISCORD_CLIENT_ID</b> 또는 <b>DISCORD_APPLICATION_ID</b>를 넣어주세요.
       {% endif %}
