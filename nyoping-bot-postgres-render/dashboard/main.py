@@ -8,6 +8,7 @@ import io
 import json
 import uuid
 import logging
+import secrets
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlencode
 
@@ -105,6 +106,237 @@ def _support_server_url() -> str:
 
 def _support_server_banner_url() -> str:
     return "/assets/images/support-server-banner.png"
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "y"}
+
+def _discord_oauth_disabled() -> bool:
+    return _truthy(_env("DISABLE_DISCORD_OAUTH", "0"))
+
+def _discord_client_id() -> str:
+    return _env("DISCORD_CLIENT_ID", "").strip()
+
+def _discord_client_secret() -> str:
+    return _env("DISCORD_CLIENT_SECRET", "").strip()
+
+def _discord_oauth_redirect_uri(request: Request | None = None) -> str:
+    uri = _env("DISCORD_OAUTH_REDIRECT_URI", "").strip() or _env("DISCORD_REDIRECT_URI", "").strip()
+    if uri:
+        return uri
+    if request is None:
+        return ""
+    return _build_public_url(request, "/oauth/discord/callback")
+
+def _discord_oauth_ready(request: Request | None = None) -> bool:
+    return (
+        (not _discord_oauth_disabled())
+        and bool(_discord_client_id())
+        and bool(_discord_client_secret())
+        and bool(_discord_oauth_redirect_uri(request))
+    )
+
+def _discord_bot_permissions() -> str:
+    return _env("DISCORD_BOT_PERMISSIONS", "268823616").strip() or "268823616"
+
+def _discord_bot_install_url(guild_id: int | None = None) -> str:
+    client_id = _discord_client_id()
+    if not client_id:
+        return ""
+    params: dict[str, str] = {
+        "client_id": client_id,
+        "scope": "bot applications.commands",
+        "permissions": _discord_bot_permissions(),
+    }
+    try:
+        gid = int(guild_id or 0)
+    except Exception:
+        gid = 0
+    if gid > 0:
+        params["guild_id"] = str(gid)
+        params["disable_guild_select"] = "true"
+    return "https://discord.com/oauth2/authorize?" + urlencode(params)
+
+def _discord_user_auth_url(request: Request, *, next_path: str = "/admin") -> str:
+    state = secrets.token_urlsafe(24)
+    request.session["discord_oauth_state"] = state
+    request.session["discord_oauth_next"] = str(next_path or "/admin")
+    params = {
+        "client_id": _discord_client_id(),
+        "response_type": "code",
+        "redirect_uri": _discord_oauth_redirect_uri(request),
+        "scope": "identify guilds",
+        "state": state,
+        "prompt": "consent",
+    }
+    return "https://discord.com/oauth2/authorize?" + urlencode(params)
+
+def _oauth_session_user(request: Request) -> dict[str, Any]:
+    user = request.session.get("oauth_user")
+    return dict(user) if isinstance(user, dict) else {}
+
+def _oauth_logged_in(request: Request) -> bool:
+    return bool(str(request.session.get("oauth_access_token") or "").strip())
+
+def _oauth_clear_session(request: Request) -> None:
+    for key in [
+        "oauth_access_token",
+        "oauth_refresh_token",
+        "oauth_expires_at",
+        "oauth_user",
+        "discord_oauth_state",
+        "discord_oauth_next",
+    ]:
+        request.session.pop(key, None)
+
+def _discord_permission_value(raw: Any) -> int:
+    try:
+        return int(str(raw or "0"))
+    except Exception:
+        return 0
+
+def _discord_can_manage_guild(guild: Mapping[str, Any]) -> bool:
+    if bool(guild.get("owner")):
+        return True
+    perms = _discord_permission_value(guild.get("permissions") or guild.get("permissions_new"))
+    return bool(perms & 0x8) or bool(perms & 0x20)
+
+def _normalize_oauth_guild(guild: Mapping[str, Any]) -> dict[str, Any]:
+    gid = int(str(guild.get("id") or guild.get("guild_id") or "0") or 0)
+    name = str(guild.get("name") or guild.get("guild_name") or "").strip()
+    return {
+        "guild_id": gid,
+        "guild_name": name or f"서버 {gid}",
+        "icon": str(guild.get("icon") or "").strip(),
+        "owner": bool(guild.get("owner")),
+        "permissions": str(guild.get("permissions") or guild.get("permissions_new") or "0"),
+    }
+
+def _oauth_state_error_redirect(message: str) -> RedirectResponse:
+    return RedirectResponse(url="/" + ("?oauth_error=" + requests.utils.quote(message) if message else ""), status_code=302)
+
+async def _fetch_discord_oauth_user(access_token: str) -> dict[str, Any]:
+    resp = requests.get(
+        "https://discord.com/api/v10/users/@me",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=15,
+    )
+    if not (200 <= resp.status_code < 300):
+        raise RuntimeError(f"Discord 사용자 정보 조회 실패 ({resp.status_code})")
+    data = resp.json() or {}
+    return {
+        "id": str(data.get("id") or ""),
+        "username": str(data.get("username") or ""),
+        "global_name": str(data.get("global_name") or ""),
+        "avatar": str(data.get("avatar") or ""),
+    }
+
+async def _fetch_discord_oauth_guilds(access_token: str) -> list[dict[str, Any]]:
+    resp = requests.get(
+        "https://discord.com/api/v10/users/@me/guilds",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    if not (200 <= resp.status_code < 300):
+        raise RuntimeError(f"Discord 서버 목록 조회 실패 ({resp.status_code})")
+    rows = resp.json() or []
+    out = []
+    for row in rows:
+        if isinstance(row, Mapping) and _discord_can_manage_guild(row):
+            out.append(_normalize_oauth_guild(row))
+    out.sort(key=lambda x: str(x.get("guild_name") or "").lower())
+    return out
+
+async def _load_discord_oauth_context(request: Request) -> dict[str, Any]:
+    if not _oauth_logged_in(request):
+        return {"logged_in": False, "user": {}, "guilds": []}
+    access_token = str(request.session.get("oauth_access_token") or "").strip()
+    try:
+        user = _oauth_session_user(request)
+        if not user:
+            user = await _fetch_discord_oauth_user(access_token)
+            request.session["oauth_user"] = user
+        guilds = await _fetch_discord_oauth_guilds(access_token)
+        return {"logged_in": True, "user": user, "guilds": guilds}
+    except Exception:
+        log.exception("Discord OAuth context load failed")
+        _oauth_clear_session(request)
+        return {"logged_in": False, "user": {}, "guilds": []}
+
+async def _list_guilds_for_request(pool: asyncpg.Pool, request: Request) -> tuple[list[dict[str, Any]], dict[str, Any], dict[int, bool]]:
+    oauth_ctx = await _load_discord_oauth_context(request)
+    db_guilds = await _list_guilds_for_admin(pool)
+    db_lookup: dict[int, dict[str, Any]] = {}
+    for item in db_guilds:
+        try:
+            db_lookup[int(item.get("guild_id") or 0)] = dict(item)
+        except Exception:
+            continue
+
+    if _require_admin(request) and not oauth_ctx.get("logged_in"):
+        guilds = []
+        installed_map: dict[int, bool] = {}
+        for item in db_guilds:
+            gid = int(item.get("guild_id") or 0)
+            if gid <= 0:
+                continue
+            guilds.append({
+                "guild_id": gid,
+                "guild_name": str(item.get("guild_name") or f"서버 {gid}"),
+                "is_installed": True,
+                "invite_url": _discord_bot_install_url(gid),
+                "configure_url": f"/admin?guild_id={gid}",
+            })
+            installed_map[gid] = True
+        return guilds, oauth_ctx, installed_map
+
+    guilds = []
+    installed_map = {}
+    for oauth_guild in oauth_ctx.get("guilds") or []:
+        gid = int(oauth_guild.get("guild_id") or 0)
+        if gid <= 0:
+            continue
+        db_item = db_lookup.get(gid) or {}
+        db_name = str(db_item.get("guild_name") or "").strip()
+        name = str(oauth_guild.get("guild_name") or "").strip() or db_name or f"서버 {gid}"
+        installed = gid in db_lookup
+        guilds.append({
+            "guild_id": gid,
+            "guild_name": name,
+            "is_installed": installed,
+            "invite_url": _discord_bot_install_url(gid),
+            "configure_url": f"/admin?guild_id={gid}",
+        })
+        installed_map[gid] = installed
+    guilds.sort(key=lambda x: str(x.get("guild_name") or "").lower())
+    return guilds, oauth_ctx, installed_map
+
+async def _request_can_manage_guild(pool: asyncpg.Pool, request: Request, guild_id: int) -> bool:
+    try:
+        gid = int(guild_id or 0)
+    except Exception:
+        gid = 0
+    if gid <= 0:
+        return False
+    if _require_admin(request):
+        return True
+    oauth_ctx = await _load_discord_oauth_context(request)
+    for item in oauth_ctx.get("guilds") or []:
+        if int(item.get("guild_id") or 0) == gid:
+            return True
+    return False
+
+async def _request_user_label(request: Request) -> str:
+    if _require_admin(request) and not _oauth_logged_in(request):
+        return "관리자 비밀번호 로그인"
+    oauth_ctx = await _load_discord_oauth_context(request)
+    user = oauth_ctx.get("user") or {}
+    label = str(user.get("global_name") or user.get("username") or "").strip()
+    if label:
+        return f"Discord 로그인 · {label}"
+    if _require_admin(request):
+        return "관리자 + Discord 로그인"
+    return "Discord 로그인"
 
 
 def _legal_effective_date() -> str:
@@ -1005,37 +1237,6 @@ def _safe_selected_guild_name(guilds: Sequence[Mapping[str, Any]], gid: int | No
             continue
     return str(gid)
 
-
-def _user_display_name_from_row(row: Mapping[str, Any] | None, fallback_user_id: int | None = None) -> str:
-    if not row:
-        return str(int(fallback_user_id)) if fallback_user_id else "알 수 없는 유저"
-    for key in ("display_name", "nick", "global_name", "username", "user_name", "member_name"):
-        try:
-            value = str(row.get(key) or "").strip()
-        except Exception:
-            value = ""
-        if value:
-            return value
-    try:
-        uid = int(row.get("user_id") or fallback_user_id or 0)
-    except Exception:
-        uid = int(fallback_user_id or 0)
-    return str(uid) if uid > 0 else "알 수 없는 유저"
-
-def _member_option_label(row: Mapping[str, Any]) -> str:
-    name = _user_display_name_from_row(row)
-    try:
-        uid = int(row.get("user_id") or 0)
-    except Exception:
-        uid = 0
-    return f"{name} · {uid}" if uid > 0 else name
-
-def _xp_to_level(xp: int | None) -> int:
-    try:
-        return max(0, int(xp or 0)) // 100
-    except Exception:
-        return 0
-
 def _textish_channels(channels: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """Best-effort filter for message-capable channels.
     Falls back to all channels if type info is missing.
@@ -1159,6 +1360,18 @@ async def _update_settings(pool: asyncpg.Pool, guild_id: int, **updates: Any) ->
 def _require_admin(request: Request) -> bool:
     return bool(request.session.get("admin_ok"))
 
+async def _require_guild_access_or_redirect(request: Request, guild_id: int) -> RedirectResponse | None:
+    pool = await _ensure_pool(app)
+    if await _request_can_manage_guild(pool, request, int(guild_id)):
+        return None
+    return RedirectResponse(url="/", status_code=302)
+
+async def _require_guild_access_or_json(request: Request, guild_id: int):
+    pool = await _ensure_pool(app)
+    if await _request_can_manage_guild(pool, request, int(guild_id)):
+        return None
+    return JSONResponse({"ok": False, "error": "이 서버를 관리할 권한이 없어요."}, status_code=403)
+
 def _is_missing_db_schema_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     needles = [
@@ -1214,180 +1427,23 @@ async def shutdown():
         await pool.close()
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return TEMPLATES.TemplateResponse("index.html", {"request": request, "admin_ok": _require_admin(request), "developer_name": _developer_name(), "support_server_url": _support_server_url()})
-
-
-
-
-
-@app.get("/user", response_class=HTMLResponse)
-async def user_page(
-    request: Request,
-    guild_id: str | None = None,
-    user_id: str | None = None,
-    rank_page: int = 1,
-):
-    pool = await _ensure_pool(app)
-    guilds = await _list_guilds_for_admin(pool)
-    gid = int(guild_id) if guild_id and str(guild_id).isdigit() else None
-    uid = int(user_id) if user_id and str(user_id).isdigit() else None
-
-    selected_guild_name = _safe_selected_guild_name(guilds, gid)
-    selected_member: dict[str, Any] | None = None
-    member_options: list[dict[str, Any]] = []
-    leaderboard_rows: list[dict[str, Any]] = []
-    profile: dict[str, Any] | None = None
-    total_members = 0
-    rank_page_size = 50
-    rp = max(1, int(rank_page or 1))
-    flash_msg = ""
-    flash_kind = "success"
-
-    if gid:
-        raw_members = await _fetch_optional(
-            pool,
-            """SELECT user_id, username, discriminator, global_name, nick, display_name, avatar_url, updated_at
-                 FROM guild_members_cache
-                 WHERE guild_id=$1 AND in_guild=TRUE
-                 ORDER BY updated_at DESC, user_id DESC
-                 LIMIT 400""",
-            gid,
-        )
-        for row in raw_members or []:
-            item = dict(row)
-            item["member_label"] = _member_option_label(item)
-            member_options.append(item)
-        member_options.sort(key=lambda x: str(x.get("member_label") or "").lower())
-
-        total_members = int(await _fetchval_optional(
-            pool,
-            "SELECT COUNT(*) FROM guild_members_cache WHERE guild_id=$1 AND in_guild=TRUE",
-            gid,
-            default=0,
-        ) or 0)
-
-        off = (rp - 1) * rank_page_size
-        leaderboard_raw = await _fetch_optional(
-            pool,
-            """SELECT m.user_id,
-                      COALESCE(s.xp,0) AS xp,
-                      m.display_name, m.nick, m.global_name, m.username, m.avatar_url
-               FROM guild_members_cache m
-               LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
-               WHERE m.guild_id=$1 AND m.in_guild=TRUE
-               ORDER BY COALESCE(s.xp,0) DESC, m.user_id
-               LIMIT $2 OFFSET $3""",
-            gid, rank_page_size, off,
-        )
-        start_rank = off + 1
-        for i, row in enumerate(leaderboard_raw or []):
-            item = dict(row)
-            item["rank"] = start_rank + i
-            item["member_name"] = _user_display_name_from_row(item)
-            item["level"] = _xp_to_level(item.get("xp"))
-            leaderboard_rows.append(item)
-
-        if uid:
-            member_row = await _fetchrow_optional(
-                pool,
-                """SELECT user_id, username, discriminator, global_name, nick, display_name, avatar_url, updated_at
-                     FROM guild_members_cache
-                     WHERE guild_id=$1 AND user_id=$2 AND in_guild=TRUE""",
-                gid, uid,
-            )
-            if member_row:
-                selected_member = dict(member_row)
-                xp = int(await _fetchval_optional(
-                    pool,
-                    "SELECT COALESCE(xp,0) FROM user_stats WHERE guild_id=$1 AND user_id=$2",
-                    gid, uid,
-                    default=0,
-                ) or 0)
-                checkin_count = int(await _fetchval_optional(
-                    pool,
-                    "SELECT COUNT(*) FROM checkins WHERE guild_id=$1 AND user_id=$2",
-                    gid, uid,
-                    default=0,
-                ) or 0)
-                streak_row = await _fetchrow_optional(
-                    pool,
-                    "SELECT last_ymd, streak FROM checkin_streaks WHERE guild_id=$1 AND user_id=$2",
-                    gid, uid,
-                )
-                voice_today = int(await _fetchval_optional(
-                    pool,
-                    "SELECT xp FROM voice_xp_daily WHERE guild_id=$1 AND user_id=$2 AND ymd=$3",
-                    gid, uid, kst_today_ymd(),
-                    default=0,
-                ) or 0)
-                rank_value = await _fetchval_optional(
-                    pool,
-                    """WITH me AS (
-                           SELECT m.user_id, COALESCE(s.xp, 0) AS xp
-                           FROM guild_members_cache m
-                           LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
-                           WHERE m.guild_id=$1 AND m.user_id=$2 AND m.in_guild=TRUE
-                       )
-                       SELECT CASE
-                           WHEN EXISTS(SELECT 1 FROM me) THEN
-                               1 + (
-                                   SELECT COUNT(*)
-                                   FROM guild_members_cache m
-                                   LEFT JOIN user_stats s ON s.guild_id=m.guild_id AND s.user_id=m.user_id
-                                   CROSS JOIN me
-                                   WHERE m.guild_id=$1
-                                     AND m.in_guild=TRUE
-                                     AND (
-                                         COALESCE(s.xp, 0) > me.xp
-                                         OR (COALESCE(s.xp, 0) = me.xp AND m.user_id < me.user_id)
-                                     )
-                               )
-                           ELSE NULL
-                       END""",
-                    gid, uid,
-                    default=None,
-                )
-                selected_member["member_name"] = _user_display_name_from_row(selected_member, uid)
-                selected_member["member_label"] = _member_option_label(selected_member)
-                profile = {
-                    "user_id": uid,
-                    "member_name": selected_member["member_name"],
-                    "avatar_url": str(selected_member.get("avatar_url") or "").strip(),
-                    "xp": xp,
-                    "level": _xp_to_level(xp),
-                    "checkin_count": checkin_count,
-                    "streak": int((dict(streak_row).get("streak") if streak_row else 0) or 0),
-                    "streak_last_ymd": str((dict(streak_row).get("last_ymd") if streak_row else "") or ""),
-                    "voice_xp_today": voice_today,
-                    "rank": int(rank_value) if rank_value is not None else None,
-                    "rank_total": total_members,
-                }
-            else:
-                flash_msg = "선택한 유저를 이 서버의 현재 멤버 목록에서 찾지 못했어요."
-                flash_kind = "warning"
-
+async def index(request: Request, oauth_error: str | None = None):
+    oauth_ctx = await _load_discord_oauth_context(request)
     return TEMPLATES.TemplateResponse(
-        "user.html",
+        "index.html",
         {
             "request": request,
-            "guilds": guilds,
-            "guild_id": gid,
-            "user_id": uid,
-            "selected_guild_name": selected_guild_name,
-            "member_options": member_options,
-            "selected_member": selected_member,
-            "profile": profile,
-            "leaderboard_rows": leaderboard_rows,
-            "rank_page": rp,
-            "rank_total": total_members,
-            "rank_page_size": rank_page_size,
-            "flash_msg": flash_msg,
-            "flash_kind": flash_kind,
+            "admin_ok": _require_admin(request),
             "developer_name": _developer_name(),
-            "support_server_url": _support_server_url(),
+            "oauth_enabled": _discord_oauth_ready(request),
+            "oauth_disabled": _discord_oauth_disabled(),
+            "oauth_user": oauth_ctx.get("user") or {},
+            "oauth_logged_in": bool(oauth_ctx.get("logged_in")),
+            "oauth_error": oauth_error or "",
         },
     )
+
+
 
 
 @app.get("/assets/images/support-server-banner.png")
@@ -1397,6 +1453,62 @@ async def support_server_banner_image():
         return Response(status_code=404)
     return FileResponse(str(image_path), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
+
+
+@app.get("/login/discord")
+async def discord_login(request: Request, next: str = "/admin"):
+    if not _discord_oauth_ready(request):
+        return RedirectResponse(url="/?oauth_error=" + requests.utils.quote("Discord 로그인 환경변수가 아직 준비되지 않았어요."), status_code=302)
+    return RedirectResponse(url=_discord_user_auth_url(request, next_path=next or "/admin"), status_code=302)
+
+@app.get("/oauth/discord/callback")
+async def discord_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    if error:
+        return RedirectResponse(url="/?oauth_error=" + requests.utils.quote(f"Discord 로그인 실패: {error}"), status_code=302)
+    if not _discord_oauth_ready(request):
+        return RedirectResponse(url="/?oauth_error=" + requests.utils.quote("Discord 로그인 환경변수가 아직 준비되지 않았어요."), status_code=302)
+    session_state = str(request.session.get("discord_oauth_state") or "")
+    if not code or not state or not session_state or state != session_state:
+        _oauth_clear_session(request)
+        return RedirectResponse(url="/?oauth_error=" + requests.utils.quote("Discord 로그인 상태 검증에 실패했어요. 다시 로그인해 주세요."), status_code=302)
+
+    form = {
+        "client_id": _discord_client_id(),
+        "client_secret": _discord_client_secret(),
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": _discord_oauth_redirect_uri(request),
+    }
+    try:
+        token_resp = requests.post(
+            "https://discord.com/api/v10/oauth2/token",
+            data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=20,
+        )
+        if not (200 <= token_resp.status_code < 300):
+            raise RuntimeError(f"Discord 토큰 발급 실패 ({token_resp.status_code})")
+        payload = token_resp.json() or {}
+        access_token = str(payload.get("access_token") or "").strip()
+        if not access_token:
+            raise RuntimeError("Discord 액세스 토큰이 비어 있어요.")
+        request.session["oauth_access_token"] = access_token
+        request.session["oauth_refresh_token"] = str(payload.get("refresh_token") or "")
+        request.session["oauth_expires_at"] = int(payload.get("expires_in") or 0)
+        request.session["oauth_user"] = await _fetch_discord_oauth_user(access_token)
+        next_path = str(request.session.get("discord_oauth_next") or "/admin")
+        request.session.pop("discord_oauth_state", None)
+        request.session.pop("discord_oauth_next", None)
+        return RedirectResponse(url=next_path if next_path.startswith("/") else "/admin", status_code=302)
+    except Exception:
+        log.exception("Discord OAuth callback failed")
+        _oauth_clear_session(request)
+        return RedirectResponse(url="/?oauth_error=" + requests.utils.quote("Discord 로그인 처리 중 오류가 발생했어요."), status_code=302)
+
+@app.get("/logout")
+async def dashboard_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/", status_code=302)
 
 @app.get("/legal/privacy", response_class=HTMLResponse)
 async def legal_privacy(request: Request):
@@ -1425,15 +1537,20 @@ async def admin_login(request: Request, password: str = Form(...)):
     return RedirectResponse(url="/admin", status_code=302)
 
 
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, guild_id: str | None = None, msg: str | None = None, kind: str | None = None, saved_at: str | None = None, rank_page: int = 1):
-    if not _require_admin(request):
+    pool = await _ensure_pool(app)
+    oauth_ctx = await _load_discord_oauth_context(request)
+    has_access = _require_admin(request) or bool(oauth_ctx.get("logged_in"))
+    if not has_access:
         return RedirectResponse(url="/", status_code=302)
 
-    pool = await _ensure_pool(app)
-
-    guilds = await _list_guilds_for_admin(pool)
+    guilds, oauth_ctx, installed_map = await _list_guilds_for_request(pool, request)
     gid = int(guild_id) if guild_id and str(guild_id).isdigit() else None
+    if gid and not await _request_can_manage_guild(pool, request, gid):
+        return RedirectResponse(url="/admin?msg=" + requests.utils.quote("이 서버를 관리할 권한이 없어요.") + "&kind=error", status_code=302)
+
     log.info("Admin page open guild_id=%s", gid)
     settings: dict[str, Any] | None = None
     roles = []
@@ -1579,6 +1696,10 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
         except Exception:
             pending_role_sync = 0
 
+    selected_guild_installed = bool(installed_map.get(int(gid or 0), False)) if gid else False
+    if gid and _require_admin(request):
+        selected_guild_installed = True
+
     return TEMPLATES.TemplateResponse(
         "admin.html",
         {
@@ -1611,6 +1732,12 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
             "saved_at": saved_at or "",
             "permission_report": permission_report,
             "activity_logs": activity_logs,
+            "oauth_enabled": _discord_oauth_ready(request),
+            "oauth_user": oauth_ctx.get("user") or {},
+            "oauth_logged_in": bool(oauth_ctx.get("logged_in")),
+            "viewer_label": await _request_user_label(request),
+            "selected_guild_installed": selected_guild_installed,
+            "selected_guild_invite_url": _discord_bot_install_url(gid) if gid else "",
         },
     )
 
@@ -1618,8 +1745,9 @@ async def admin_page(request: Request, guild_id: str | None = None, msg: str | N
 
 @app.post("/admin/api/welcome-image-upload")
 async def api_welcome_image_upload(request: Request, guild_id: int = Form(...), image: UploadFile = File(...)):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     raw = await image.read()
     try:
@@ -1655,8 +1783,9 @@ async def media_get(media_id: str):
 
 @app.get("/admin/api/welcome-preview-member")
 async def api_welcome_preview_member(request: Request, guild_id: int, user_id: str | None = None):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     row = None
     if user_id and str(user_id).isdigit():
@@ -1685,11 +1814,11 @@ async def api_welcome_preview_member(request: Request, guild_id: int, user_id: s
 
 @app.post("/admin/test-welcome")
 async def test_welcome_message(request: Request):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-
     form = dict(await request.form())
     guild_id = _to_int(form.get("guild_id"), 0)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
     if guild_id <= 0:
         return JSONResponse({"ok": False, "error": "guild_id_missing"}, status_code=400)
 
@@ -1871,8 +2000,9 @@ welcome_text3_box_width: int = Form(500),
     return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     try:
         await _update_settings(
@@ -1991,8 +2121,9 @@ async def quick_reset_checkin(
     ymd: str = Form(""),    return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     ymd = ymd.strip() or kst_today_ymd()
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
@@ -2015,8 +2146,9 @@ async def quick_set_level(
     level: int = Form(...),    return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     user_ids = await _resolve_target_user_ids(pool, int(guild_id), target_type, user_id, role_id)
     if not user_ids:
@@ -2051,8 +2183,9 @@ async def rules_upsert(
     remove_role_ids: str = Form(""),    return_pane: str = Form("levelsettings"),
     return_group: str = Form("levelsettings"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     add_ids = _parse_ids(add_role_ids)
     rem_ids = _parse_ids(remove_role_ids)
@@ -2071,8 +2204,9 @@ async def rules_upsert(
 
 @app.post("/admin/rules-delete")
 async def rules_delete(request: Request, guild_id: int = Form(...), level: int = Form(...)):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     await pool.execute("DELETE FROM level_role_sets WHERE guild_id=$1 AND level=$2", int(guild_id), int(level))
     queued = await _enqueue_all_members_role_sync(pool, int(guild_id))
@@ -2086,8 +2220,9 @@ async def reaction_block_add(
     message: str = Form(...),
     blocked_role_ids: str = Form(""),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     # parse
     mids = _parse_ids(message)
@@ -2117,8 +2252,9 @@ async def reaction_block_delete(
     message_id: int = Form(...),
     role_id: int = Form(...),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     await pool.execute(
         "DELETE FROM reaction_blocks WHERE guild_id=$1 AND message_id=$2 AND blocked_role_id=$3",
@@ -2138,8 +2274,9 @@ async def reaction_role_upsert(
     add_role_ids: str = Form(""),
     remove_role_ids: str = Form(""),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     mids = _parse_ids(message)
     if not mids:
@@ -2175,8 +2312,9 @@ async def reaction_role_delete(
     message_id: int = Form(...),
     emoji_key: str = Form(...),    return_pane: str = Form("reaction"),
 ):
-    if not _require_admin(request):
-        return RedirectResponse(url="/", status_code=302)
+    auth_error = await _require_guild_access_or_redirect(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     await pool.execute(
         "DELETE FROM reaction_role_rules WHERE guild_id=$1 AND message_id=$2 AND emoji_key=$3",
@@ -2187,8 +2325,9 @@ async def reaction_role_delete(
 # ---- APIs for UI (DB cache only, no Discord REST) ----
 @app.get("/admin/api/roles_search")
 async def api_roles_search(request: Request, guild_id: int, q: str = ""):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     qq = (q or "").strip()
     if qq:
@@ -2213,8 +2352,9 @@ async def api_roles_search(request: Request, guild_id: int, q: str = ""):
 
 @app.get("/admin/api/members_search")
 async def api_members_search(request: Request, guild_id: int, q: str = ""):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
 
     pool = await _ensure_pool(app)
     q = (q or "").strip()
@@ -2270,8 +2410,9 @@ async def api_members_search(request: Request, guild_id: int, q: str = ""):
 
 @app.get("/admin/api/members_list")
 async def api_members_list(request: Request, guild_id: int, limit: int = 200, offset: int = 0):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     try:
         rows = await pool.fetch(
@@ -2298,8 +2439,9 @@ async def api_members_list(request: Request, guild_id: int, limit: int = 200, of
 
 @app.get("/admin/api/members_by_role")
 async def api_members_by_role(request: Request, guild_id: int, role_id: int):
-    if not _require_admin(request):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    auth_error = await _require_guild_access_or_json(request, int(guild_id))
+    if auth_error:
+        return auth_error
     pool = await _ensure_pool(app)
     try:
         rows = await pool.fetch(
