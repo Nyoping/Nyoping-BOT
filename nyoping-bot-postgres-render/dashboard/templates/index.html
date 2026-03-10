@@ -5,83 +5,211 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>뇨핑봇 대시보드</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;margin:0;background:#0b1220;color:#e5e7eb}
-    .wrap{max-width:980px;margin:0 auto;padding:28px}
-    .hero{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-end}
-    .sub{color:#94a3b8;font-size:14px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:16px;margin-top:18px}
-    .card{background:#111a2e;border:1px solid #1f2a44;border-radius:16px;padding:18px;box-shadow:0 14px 34px rgba(0,0,0,.18)}
-    input,button,.btn{font-size:16px}
-    input{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3a60;background:#0b1220;color:#e5e7eb}
-    button,.btn{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:white;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
-    .btn.secondary{background:#334155}
-    .row{display:flex;gap:12px;align-items:center}
-    .mt{margin-top:14px}
-    .small{font-size:13px;color:#9ca3af;line-height:1.6}
-    .title{margin:0 0 8px}
+    :root{
+      --bg:#0b1220;
+      --bg2:#111a2e;
+      --card:#111a2e;
+      --card2:#0f1729;
+      --line:#1f2a44;
+      --line2:#2b3a60;
+      --text:#e5e7eb;
+      --muted:#94a3b8;
+      --blue:#2563eb;
+      --blue2:#1d4ed8;
+      --soft:#334155;
+      --accent:#7dd3fc;
+      --shadow:0 18px 48px rgba(0,0,0,.28);
+    }
+    *{box-sizing:border-box}
+    body{
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;
+      margin:0;background:
+      radial-gradient(circle at top, rgba(37,99,235,.14), transparent 28%),
+      linear-gradient(180deg, #0b1220 0%, #0a1020 100%);
+      color:var(--text)
+    }
+    .wrap{max-width:1100px;margin:0 auto;padding:34px 24px 40px}
+    .hero{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start}
+    .hero-left{max-width:760px}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(37,99,235,.16);border:1px solid rgba(125,211,252,.18);font-size:13px;color:#c7d2fe;margin-bottom:16px}
+    h1{margin:0;font-size:clamp(28px,4vw,42px);line-height:1.16}
+    .sub{color:var(--muted);font-size:15px;line-height:1.75;margin-top:12px}
+    .developer-pill{padding:10px 14px;border-radius:999px;background:#0f1729;border:1px solid var(--line);color:#cbd5e1;font-size:13px;white-space:nowrap}
+    .main-card{
+      margin-top:24px;padding:28px;border-radius:24px;background:
+      linear-gradient(180deg, rgba(37,99,235,.15), rgba(37,99,235,.05)),
+      var(--card);
+      border:1px solid rgba(125,211,252,.18);
+      box-shadow:var(--shadow);
+    }
+    .main-top{display:grid;grid-template-columns:1.25fr .95fr;gap:20px}
+    .title{margin:0 0 10px;font-size:28px}
+    .lead{font-size:15px;line-height:1.8;color:#dbe5f5}
+    .step-box{
+      background:rgba(11,18,32,.6);border:1px solid rgba(125,211,252,.12);
+      border-radius:18px;padding:18px
+    }
+    .step-box h3{margin:0 0 12px;font-size:16px}
+    .steps{display:grid;gap:10px}
+    .step{
+      display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:14px;
+      background:rgba(15,23,41,.7);border:1px solid rgba(148,163,184,.12)
+    }
+    .step-num{
+      width:26px;height:26px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+      background:rgba(37,99,235,.18);color:#bfdbfe;font-weight:700;font-size:13px;flex:none
+    }
+    .step-text{color:#cbd5e1;font-size:14px;line-height:1.6}
+    .cta-row{display:flex;gap:14px;flex-wrap:wrap;margin-top:24px}
+    .btn,button{
+      appearance:none;border:0;border-radius:14px;padding:14px 18px;cursor:pointer;text-decoration:none;
+      display:inline-flex;align-items:center;justify-content:center;font-size:15px;font-weight:700
+    }
+    .btn-primary{background:linear-gradient(180deg, var(--blue), var(--blue2));color:white;box-shadow:0 10px 24px rgba(37,99,235,.28)}
+    .btn-secondary{background:#1e293b;color:#e5e7eb;border:1px solid #334155}
+    .btn-ghost{background:transparent;color:#bfdbfe;border:1px solid rgba(125,211,252,.28)}
+    .note{margin-top:16px;color:#cbd5e1;font-size:14px;line-height:1.7}
+    .oauth-state{margin-top:14px;font-size:14px;color:#cbd5e1}
+    .oauth-state a{color:#93c5fd;text-decoration:none}
+    .mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+    .mini-card{
+      background:rgba(15,23,41,.75);border:1px solid rgba(148,163,184,.12);
+      border-radius:18px;padding:18px
+    }
+    .mini-card h3{margin:0 0 8px;font-size:16px}
+    .mini-card p{margin:0;color:#94a3b8;font-size:14px;line-height:1.7}
+    .invite-flow{
+      display:none;margin-top:18px;background:#0f1729;border:1px solid rgba(125,211,252,.16);
+      border-radius:18px;padding:18px
+    }
+    .invite-flow h3{margin:0 0 8px;font-size:18px}
+    .invite-flow p{margin:0;color:#cbd5e1;font-size:14px;line-height:1.7}
+    .section{margin-top:26px}
+    .admin-card{
+      background:#0f1729;border:1px solid var(--line);border-radius:18px;padding:18px;max-width:460px
+    }
+    .admin-card h2{margin:0 0 8px;font-size:18px}
+    .admin-card p{margin:0;color:var(--muted);font-size:13px;line-height:1.7}
+    .admin-form{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
+    input{
+      width:100%;padding:12px 13px;border-radius:12px;border:1px solid var(--line2);background:#0b1220;color:#e5e7eb;font-size:15px
+    }
+    .admin-form input{flex:1;min-width:220px}
+    .admin-form button{padding:12px 16px;background:#334155;color:white}
+    .footer{
+      margin-top:30px;padding-top:18px;border-top:1px solid rgba(148,163,184,.12);
+      display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;color:#94a3b8;font-size:13px
+    }
+    .footer a{color:#93c5fd;text-decoration:none}
+    @media (max-width: 840px){
+      .main-top{grid-template-columns:1fr}
+      .mini-grid{grid-template-columns:1fr}
+      .wrap{padding:24px 16px 34px}
+      .main-card{padding:22px}
+      .cta-row{flex-direction:column}
+      .cta-row .btn{width:100%}
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="hero">
-      <div>
-        <h1 style="margin:0">❄️ 뇨핑봇 대시보드</h1>
-        <div class="sub">서버 운영자는 자기 서버에 뇨핑봇을 초대한 뒤 대시보드에서 서버 설정을 관리할 수 있어요.</div>
+      <div class="hero-left">
+        <div class="eyebrow">❄️ Northflank 통합 운영 · Discord 서버 대시보드</div>
+        <h1>뇨핑봇을 서버에 초대하고<br>바로 설정을 시작하세요</h1>
+        <div class="sub">다른 서버 운영자도 자기 서버에 뇨핑봇을 추가한 뒤 Discord 로그인으로 자기 서버만 선택해서 설정할 수 있어요.</div>
       </div>
-      <div class="small">개발자: <b>{{ developer_name }}</b></div>
+      <div class="developer-pill">개발자: <b>{{ developer_name }}</b></div>
     </div>
 
-    <div class="grid">
-      <div class="card">
-        <h2 class="title">관리자 로그인</h2>
-        <p class="small">관리자 비밀번호로 로그인하면 서버 설정과 빠른 작업을 사용할 수 있어요.</p>
-        <form method="post" action="/admin-login" class="mt">
-          <div class="row">
-            <input type="password" name="password" placeholder="관리자 비밀번호" required>
-            <button type="submit">로그인</button>
+    <div class="main-card">
+      <div class="main-top">
+        <div>
+          <h2 class="title">서버 운영자용 시작</h2>
+          <div class="lead">
+            먼저 서버에 뇨핑봇을 초대하고, 그다음 Discord 로그인으로 대시보드에 들어오면 됩니다.
+            초대가 끝난 뒤에는 내 서버 목록에서 바로 설정을 이어갈 수 있어요.
           </div>
-        </form>
-        <div class="mt small">
-          로그인 후 <b>/admin</b> 페이지에서 서버 설정을 관리할 수 있어요.
+
+          <div class="cta-row">
+            {% if invite_url %}
+            <button type="button" class="btn btn-secondary" onclick="openInviteFlow('{{ invite_url }}')">서버에 봇 초대하기</button>
+            {% endif %}
+            <a href="{{ dashboard_entry_url }}" class="btn btn-primary">{% if oauth_enabled %}Discord 로그인 후 대시보드{% else %}대시보드로 이동{% endif %}</a>
+          </div>
+
+          <div class="note">
+            권장 순서: <b>서버에 봇 초대하기</b> → <b>Discord 로그인</b> → <b>내 서버 선택</b> → <b>설정 저장</b>
+          </div>
+
+          {% if oauth_user and oauth_user.username %}
+          <div class="oauth-state">
+            현재 로그인: <b>{{ oauth_user.global_name or oauth_user.username }}</b> ·
+            <a href="/logout/discord">로그아웃</a>
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="step-box">
+          <h3>처음 쓰는 서버 운영자도 이렇게 하면 돼요</h3>
+          <div class="steps">
+            <div class="step">
+              <div class="step-num">1</div>
+              <div class="step-text">서버에 뇨핑봇을 초대합니다.</div>
+            </div>
+            <div class="step">
+              <div class="step-num">2</div>
+              <div class="step-text">Discord 계정으로 로그인해서 내가 관리하는 서버 목록을 불러옵니다.</div>
+            </div>
+            <div class="step">
+              <div class="step-num">3</div>
+              <div class="step-text">봇이 들어간 서버를 선택하고 자동 인사, 레벨, 채널 제어 등을 설정합니다.</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-  <h2 class="title">다른 서버 운영자 시작하기</h2>
-  <p class="small">다른 서버 운영자도 자기 서버에 뇨핑봇을 초대한 뒤 대시보드에서 자기 서버만 설정할 수 있어요.</p>
-  <div class="mt row" style="flex-wrap:wrap">
-    {% if invite_url %}
-    <button type="button" class="btn secondary" onclick="openInviteFlow('{{ invite_url }}')">봇 초대하기</button>
-    {% endif %}
-    <a href="{{ dashboard_entry_url }}" class="btn">{% if oauth_enabled %}Discord 로그인 후 대시보드{% else %}대시보드로 이동{% endif %}</a>
-  </div>
-  <div class="mt small">
-    순서: <b>봇 초대</b> → <b>Discord 로그인</b> → <b>자기 서버 선택 후 설정</b><br>
-    공개용 일반 사용자 페이지는 제거했고, 운영자용 흐름만 남겼어요.{% if oauth_user and oauth_user.username %}<br>현재 로그인: <b>{{ oauth_user.global_name or oauth_user.username }}</b> · <a href="/logout/discord" style="color:#93c5fd;text-decoration:none">로그아웃</a>{% endif %}
-  </div>
-</div>
-    
-      <div class="card" id="inviteFlowCard" style="display:none">
-        <h2 class="title">봇 초대 진행 중</h2>
-        <p class="small" id="inviteFlowText">Discord 초대 창은 새 창으로 열립니다. 초대가 끝나도 이 페이지로 자동 복귀하지 않는 게 정상이에요.</p>
-        <div class="mt row" style="flex-wrap:wrap">
-          <button type="button" class="btn secondary" onclick="reopenInviteFlow()">초대 창 다시 열기</button>
-          <a href="{{ dashboard_entry_url }}" class="btn">초대 완료 후 대시보드로 이동</a>
-          <button type="button" class="btn secondary" onclick="clearInviteFlow()">닫기</button>
+      <div class="mini-grid">
+        <div class="mini-card">
+          <h3>봇 초대</h3>
+          <p>아직 뇨핑봇이 없는 서버라면 먼저 초대부터 진행하세요. 초대 창은 새 창으로 열립니다.</p>
         </div>
-        <div class="mt small">흐름: <b>봇 초대</b> → <b>이 페이지로 돌아오기</b> → <b>대시보드로 이동</b> → <b>서버 선택 후 설정</b></div>
+        <div class="mini-card">
+          <h3>Discord 로그인</h3>
+          <p>로그인 후에는 내가 관리 가능한 서버만 대시보드에 표시되어, 다른 서버 운영자도 자기 서버만 설정할 수 있어요.</p>
+        </div>
       </div>
-</div>
+
+      <div class="invite-flow" id="inviteFlowCard">
+        <h3>봇 초대 진행 중</h3>
+        <p id="inviteFlowText">Discord 초대 창은 새 창으로 열립니다. 초대가 끝난 뒤 원래 이 페이지에서 대시보드로 이동하면 됩니다.</p>
+        <div class="cta-row" style="margin-top:16px">
+          <button type="button" class="btn btn-secondary" onclick="reopenInviteFlow()">초대 창 다시 열기</button>
+          <a href="{{ dashboard_entry_url }}" class="btn btn-primary">초대 완료 후 대시보드로 이동</a>
+          <button type="button" class="btn btn-ghost" onclick="clearInviteFlow()">닫기</button>
+        </div>
+      </div>
     </div>
 
-    <div class="mt small" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div class="section">
+      <div class="admin-card">
+        <h2>관리자 로그인</h2>
+        <p>관리자 비밀번호 로그인은 전체 운영 점검이나 빠른 작업이 필요할 때만 사용하면 됩니다. 일반 서버 운영자는 위의 초대/Discord 로그인 흐름만 사용하면 됩니다.</p>
+        <form method="post" action="/admin-login" class="admin-form">
+          <input type="password" name="password" placeholder="관리자 비밀번호" required>
+          <button type="submit">관리자 로그인</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="footer">
       <span>
-        <a href="/legal/privacy" style="color:#93c5fd;text-decoration:none">개인정보처리방침</a>
+        <a href="/legal/privacy">개인정보처리방침</a>
         ·
-        <a href="/legal/terms" style="color:#93c5fd;text-decoration:none">이용약관</a>
+        <a href="/legal/terms">이용약관</a>
       </span>
       <span>
-        <a href="{{ support_server_url if support_server_url else '#' }}" style="color:#93c5fd;text-decoration:none">지원겸 종합게임 서버</a>
+        <a href="{{ support_server_url if support_server_url else '#' }}">지원겸 종합게임 서버</a>
       </span>
     </div>
   </div>
@@ -120,6 +248,5 @@
       }
     });
   </script>
-
 </body>
 </html>
