@@ -26,7 +26,7 @@
     <div class="hero">
       <div>
         <h1 style="margin:0">❄️ 뇨핑봇 대시보드</h1>
-        <div class="sub">관리자는 서버 설정을, 일반 사용자는 프로필/랭킹 같은 공개 정보를 볼 수 있어요.</div>
+        <div class="sub">서버 운영자는 자기 서버에 뇨핑봇을 초대한 뒤 대시보드에서 서버 설정을 관리할 수 있어요.</div>
       </div>
       <div class="small">개발자: <b>{{ developer_name }}</b></div>
     </div>
@@ -47,15 +47,19 @@
       </div>
 
       <div class="card">
-        <h2 class="title">일반 사용자 입장</h2>
-        <p class="small">비밀번호 없이 들어가서 서버 랭킹, 유저 프로필, 출석/레벨 정보를 확인할 수 있어요.</p>
-        <div class="mt">
-          <a href="/user" class="btn secondary">사용자 페이지 열기</a>
-        </div>
-        <div class="mt small">
-          일반 사용자 페이지는 공개용 조회 화면이며, 서버 설정 변경은 할 수 없어요.
-        </div>
-      </div>
+  <h2 class="title">다른 서버 운영자 시작하기</h2>
+  <p class="small">다른 서버 운영자도 자기 서버에 뇨핑봇을 초대한 뒤 대시보드에서 자기 서버만 설정할 수 있어요.</p>
+  <div class="mt row" style="flex-wrap:wrap">
+    {% if invite_url %}
+    <a href="{{ invite_url }}" class="btn secondary" target="_blank" rel="noopener">봇 초대하기</a>
+    {% endif %}
+  </div>
+  <div class="mt small">
+    순서: <b>봇 초대</b> → <b>Discord 로그인</b> → <b>자기 서버 선택 후 설정</b><br>
+    공개용 일반 사용자 페이지는 제거했고, 운영자용 흐름만 남겼어요.
+  </div>
+</div>
+    </div>
     </div>
 
     <div class="mt small" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
