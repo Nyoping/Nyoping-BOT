@@ -1,79 +1,94 @@
-# 뇨핑봇 (공개 배포 + 대시보드) — Postgres 버전
+# 뇨핑봇 v1.8
 
-이 ZIP은 **봇(Discord)** 과 **대시보드(Web)** 가 같은 **Postgres(DB)** 를 공유하도록 만든 버전입니다.
+Northflank 기준으로 운영하는 **Discord 봇 + FastAPI/Jinja2 대시보드** 통합 프로젝트입니다.
 
-## 추천 구성
-- **봇**: weirdhost / VPS / 내 PC (24시간 가능 환경)
-- **대시보드**: Render Web Service
-- **DB**: Neon Postgres 같은 외부 Postgres
+## 현재 기준 핵심 기능
+- 자동 인사 / 퇴장 메시지
+- 자동 인사 이미지 생성 및 테스트 전송
+- 한글 폰트 포함 이미지 렌더링
+- 레벨 / 경험치 / 출석 / 통화 XP
+- 프로필 / 랭킹
+- 채널 제어 / 반응 기능
+- 공개 알림 방식 선택
+- Discord OAuth 로그인 기반 서버 선택
+- 봇 초대 버튼 포함 대시보드
+- 이용약관 / 개인정보처리방침 페이지
+- 개발자 정보 메뉴
 
-## 0) 준비물
-- Discord Developer Portal 앱(봇)
-- Postgres 연결 문자열(DATABASE_URL)
-- Render에 배포할 GitHub 저장소(이 프로젝트 업로드)
+## 운영 권장 구조
+- **봇:** Northflank
+- **대시보드:** Northflank
+- **DB:** Northflank Postgres
 
----
+## 필수 환경변수
+### 공통
+- `DATABASE_URL`
+- `DISCORD_TOKEN` 또는 `DISCORD_BOT_TOKEN`
+- `PYTHONUNBUFFERED=1`
 
-## 1) DB (Neon) 만들기
-1. Neon에서 프로젝트 생성
-2. Connection string 복사
-3. `.env` 또는 Render Env Vars에 `DATABASE_URL`로 등록
+### 대시보드 관리자
+- `DASHBOARD_ADMIN_PASSWORD`
+- `DASHBOARD_SESSION_SECRET`
 
-> 스키마는 봇이 처음 실행할 때 자동으로 생성됩니다.
+### Discord OAuth 로그인
+- `DISCORD_CLIENT_ID`
+- `DISCORD_CLIENT_SECRET`
+- `DISCORD_OAUTH_REDIRECT_URI`
 
----
-
-## 2) Discord 설정
-### Bot 탭
-- Token 생성 → `DISCORD_TOKEN`
-- Intents:
-  - Server Members Intent ✅ (역할 지급/관리)
-  - Voice States ✅
-  - Message Content Intent: XP 지급은 내용이 필요 없지만, 환경에 따라 켜두면 안전
-
-### OAuth2 (대시보드)
-- OAuth2 → General → Redirects:
-  - `https://<Render_주소>/callback`
-- 대시보드가 요청하는 scope: `identify guilds`
-
----
-
-## 3) Render 배포(대시보드)
-Render → New → Web Service → GitHub repo 연결
-
-- Build Command: `pip install -r requirements.txt`
-- Start Command: `uvicorn dashboard.main:app --host 0.0.0.0 --port $PORT`
-- Env Vars:
-  - DATABASE_URL
-  - DASHBOARD_BASE_URL (Render가 준 URL)
-  - DISCORD_CLIENT_ID
-  - DISCORD_CLIENT_SECRET
-  - DASHBOARD_SESSION_SECRET
-
----
-
-## 4) 봇 실행(weirdhost/PC)
-### Windows PowerShell (로컬)
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-notepad .env
-.\.venv\Scripts\python -m nyopingbot
+예시:
+```env
+DISCORD_OAUTH_REDIRECT_URI=https://너의-대시보드-도메인/oauth/discord/callback
 ```
 
-### weirdhost/Pterodactyl
-- Startup의 PY_FILE을 `bot_entry.py`로 두고 실행하면 됩니다.
-- requirements.txt는 자동 설치됩니다.
-- 환경변수(.env 또는 패널 변수)에 DISCORD_TOKEN/DATABASE_URL을 넣어주세요.
+중요:
+- Discord Developer Portal의 Redirect URI도 **위와 완전히 같은 주소**여야 합니다.
+- 예전 `/callback` 주소가 남아 있으면 로그인 오류가 날 수 있습니다.
 
----
+### 선택 환경변수
+- `DISABLE_DISCORD_OAUTH=0`
+- `DISCORD_BOT_PERMISSIONS=268823616`
+- `DISCORD_INSTALL_SCOPES=bot applications.commands`
 
-## 5) 슬래시 명령어
-- /checkin : KST 기준 출석(하루 1회, 설정으로 제한 OFF 가능)
-- /profile : 내 XP/레벨/출석
-- /leaderboard : TOP 10
-- /settings ... : XP/쿨다운/테스트옵션
-- /levelrole ... : 레벨 도달 시 역할 추가/제거
-- /clean : 최근 메시지 N개 삭제
+### 법적 / 개발자 정보
+- `DEVELOPER_NAME`
+- `SUPPORT_SERVER_URL`
 
+## Discord Developer Portal 설정
+### Bot
+- Public Bot: ON
+- 필요한 Intent:
+  - Server Members Intent
+  - Presence Intent(필요 시)
+  - Message Content Intent(필요 시)
+  - Voice State 관련 기능 사용 가능 상태
+
+### OAuth2 / Installation
+- Redirect URI:
+  - `https://너의-대시보드-도메인/oauth/discord/callback`
+- Guild Install Scopes:
+  - `bot`
+  - `applications.commands`
+
+## 배포 순서
+1. GitHub에 프로젝트 업로드
+2. Northflank에 `nyoping-dashboard`, `nyoping-bot`, Postgres 구성
+3. 환경변수 등록
+4. `nyoping-dashboard` 배포
+5. `nyoping-bot` 배포
+6. Discord OAuth 로그인 테스트
+7. 서버 선택 → 봇 초대 → 설정 저장 테스트
+
+## 대시보드 주요 경로
+- `/` : 메인 화면
+- `/admin` : 관리자/서버 설정 화면
+- `/oauth/discord/callback` : Discord 로그인 콜백
+- `/legal/privacy` : 개인정보처리방침
+- `/legal/terms` : 이용약관
+
+## 개발자 정보
+- 개발자: 뇨핑 nyoping
+- 지원겸 종합게임 서버: https://discord.gg/SUq8a4j4xB
+
+## 정리
+예전 버전에서 생성된 `README_PATCH_*.txt` 파일들은 제거하고,
+현재 프로젝트 기준 설명은 이 `README.md` 하나로 통합했습니다.
